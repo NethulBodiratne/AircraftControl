@@ -174,11 +174,11 @@ try:
         if pitch < -TOLERANCE:
             pitch_color = scale_color(COLOR_RED, abs(pitch))
             duty = angle_to_duty_cycle(pitch)
-            elevator_led_pwm.ChangeDutyCycle(duty)  # Nose down = RED
+            elevator_led_pwm.ChangeDutyCycle(duty)  # Nose down
         elif pitch > TOLERANCE:
             pitch_color = scale_color(COLOR_GREEN, abs(pitch))
             duty = angle_to_duty_cycle(pitch)
-            elevator_led_pwm.ChangeDutyCycle(duty)  # Nose up = GREEN
+            elevator_led_pwm.ChangeDutyCycle(duty)  # Nose up
         else:
             pitch_color = COLOR_BLACK
             elevator_led_pwm.ChangeDutyCycle(0)
@@ -187,12 +187,12 @@ try:
         if roll < -TOLERANCE:
             roll_color = scale_color(COLOR_ORANGE, abs(roll))
             duty = angle_to_duty_cycle(roll)
-            left_ail_led_pwm.ChangeDutyCycle(duty)
+            left_ail_led_pwm.ChangeDutyCycle(duty)  # Rolling left
             right_ail_led_pwm.ChangeDutyCycle(0)
         elif roll > TOLERANCE:
             roll_color = scale_color(COLOR_PURPLE, abs(roll))
             duty = angle_to_duty_cycle(roll)
-            right_ail_led_pwm.ChangeDutyCycle(duty)
+            right_ail_led_pwm.ChangeDutyCycle(duty) # Rolling right
             left_ail_led_pwm.ChangeDutyCycle(0)
         else:
             roll_color = COLOR_BLACK
