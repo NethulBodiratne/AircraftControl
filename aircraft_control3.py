@@ -76,15 +76,13 @@ def display_pitch_roll(pitch_color, roll_color):
 
     # Even indexed LEDs (rows 0 and 7) for pitch
     for x in range(8):
-        if x % 2 == 0:
-            pixels[0][x] = pitch_color
-            pixels[7][x] = pitch_color
+        pixels[0][x] = pitch_color
+        pixels[7][x] = pitch_color
 
     # Odd indexed LEDs (columns 0 and 7) for roll
     for y in range(8):
-        if y % 2 == 1:
-            pixels[y][0] = roll_color
-            pixels[y][7] = roll_color
+        pixels[y][0] = roll_color
+        pixels[y][7] = roll_color
 
     # Flatten and send to Sense HAT
     sense.set_pixels([pixel for row in pixels for pixel in row])
