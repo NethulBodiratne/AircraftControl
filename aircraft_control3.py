@@ -50,13 +50,23 @@ COLOR_BLACK = (0, 0, 0)
 # GPIO Setup
 GPIO.setmode(GPIO.BCM)
 GPIO.setwarnings(False)
-LEFT_AILERON_LED = 17
-RIGHT_AILERON_LED = 27
+LEFT_AILERON_LED = 5
+RIGHT_AILERON_LED = 26
 ELEVATOR_LED = 22
 
 GPIO.setup(LEFT_AILERON_LED, GPIO.OUT)
 GPIO.setup(RIGHT_AILERON_LED, GPIO.OUT)
 GPIO.setup(ELEVATOR_LED, GPIO.OUT)
+
+# Set up PWM with 100Hz frequency
+left_ail_led_pwm = GPIO.PWM(LEFT_AILERON_LED, 100)
+right_ail_led_pwm = GPIO.PWM(RIGHT_AILERON_LED, 100)
+elevator_led_pwm = GPIO.PWM(ELEVATOR_LED, 100)
+
+# Start PWM with 0% duty cycle (off)
+left_ail_led_pwm.start(0)
+right_ail_led_pwm.start(0)
+elevator_led_pwm.start(0)
 
 # Counter for entry number
 count = 0
@@ -129,6 +139,13 @@ def watch_joystick():
 # Start joystick thread
 Thread(target=watch_joystick, daemon=True).start()
 
+# -----------------------
+# LED SCALING FUNCTION (CLAMPED TO 0-100%)
+# -----------------------
+def angle_to_duty_cycle(angle, max_angle=45):
+    dc = min(max(abs(angle) / max_angle * 100, 0), 100)
+    return dc
+
 # Initial calibration
 recalibrate()
 # Continuously read the sensor and track pitch and roll
@@ -153,30 +170,34 @@ try:
         # Print the current pitch, roll, and their changes
         print(count, f"Pitch: {pitch:.2f}° (Change: {pitch_change:.2f}°), Roll: {roll:.2f}° (Change: {roll_change:.2f}°)")
         
-        # Determine pitch color and elevator LED
+        # Determine pitch color and ELEVATOR LED brightness
         if pitch < -TOLERANCE:
             pitch_color = scale_color(COLOR_RED, abs(pitch))
-            GPIO.output(ELEVATOR_LED, GPIO.HIGH)  # Nose down
+            duty = angle_to_duty_cycle(pitch)
+            elevator_led_pwm.ChangeDutyCycle(duty)  # Nose down = RED
         elif pitch > TOLERANCE:
             pitch_color = scale_color(COLOR_GREEN, abs(pitch))
-            GPIO.output(ELEVATOR_LED, GPIO.HIGH)  # Nose up
+            duty = angle_to_duty_cycle(pitch)
+            elevator_led_pwm.ChangeDutyCycle(duty)  # Nose up = GREEN
         else:
             pitch_color = COLOR_BLACK
-            GPIO.output(ELEVATOR_LED, GPIO.LOW)
+            elevator_led_pwm.ChangeDutyCycle(0)
 
-        # Determine roll color and aileron LEDs
+        # Determine roll color and AILERON LED brightness
         if roll < -TOLERANCE:
             roll_color = scale_color(COLOR_ORANGE, abs(roll))
-            GPIO.output(LEFT_AILERON_LED, GPIO.HIGH)
-            GPIO.output(RIGHT_AILERON_LED, GPIO.LOW)
+            duty = angle_to_duty_cycle(roll)
+            left_ail_led_pwm.ChangeDutyCycle(duty)
+            right_ail_led_pwm.ChangeDutyCycle(0)
         elif roll > TOLERANCE:
             roll_color = scale_color(COLOR_PURPLE, abs(roll))
-            GPIO.output(RIGHT_AILERON_LED, GPIO.HIGH)
-            GPIO.output(LEFT_AILERON_LED, GPIO.LOW)
+            duty = angle_to_duty_cycle(roll)
+            right_ail_led_pwm.ChangeDutyCycle(duty)
+            left_ail_led_pwm.ChangeDutyCycle(0)
         else:
             roll_color = COLOR_BLACK
-            GPIO.output(LEFT_AILERON_LED, GPIO.LOW)
-            GPIO.output(RIGHT_AILERON_LED, GPIO.LOW)
+            left_ail_led_pwm.ChangeDutyCycle(0)
+            right_ail_led_pwm.ChangeDutyCycle(0)
 
         # Display pitch and roll status visually
         display_pitch_roll(pitch_color, roll_color)
