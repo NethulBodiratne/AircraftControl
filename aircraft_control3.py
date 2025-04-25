@@ -212,5 +212,17 @@ try:
         # Wait before reading again
         time.sleep(0.5)
 
+# Handle exit on keyboard interrupt (Ctrl+C)
 except KeyboardInterrupt:
     print("Program terminated by user.")
+# Handle any other unexpected errors
+except Exception as e:
+    print(f"\nAn unexpected error occurred: {e}")
+    import traceback
+    traceback.print_exc() # Print detailed traceback for debugging
+# Finally block: This code runs whether the try block completed successfully or an exception occurred
+finally:
+    # Clean up resources before the script fully exits
+    sense.clear()      # Clear the Sense HAT LED matrix
+    cleanup_gpio()     # Stop PWM and release GPIO pins
+    print("Program terminated.")
