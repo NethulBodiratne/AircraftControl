@@ -9,7 +9,7 @@ import RPi.GPIO as GPIO # Library to control Raspberry Pi GPIO pins
 # --- Configuration ---
 
 # Control Loop Settings
-LOOP_DELAY_SECONDS = 0.1  # Defines the pause duration in the main loop, effectively setting the loop frequency (1 / 0.1 = 10 Hz)
+LOOP_DELAY_SECONDS = 0.25  # Defines the pause duration in the main loop, effectively setting the loop frequency (1 / 0.1 = 10 Hz)
 
 # Target Angles (degrees) - Relative to the initial orientation captured at startup
 TARGET_PITCH = 0.0  # Target pitch angle relative to the starting pitch
