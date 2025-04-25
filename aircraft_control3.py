@@ -210,7 +210,7 @@ try:
         count += 1
         
         # Wait before reading again
-        time.sleep(0.5)
+        time.sleep(0.25)
 
 # Handle exit on keyboard interrupt (Ctrl+C)
 except KeyboardInterrupt:
