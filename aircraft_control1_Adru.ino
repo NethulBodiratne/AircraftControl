@@ -7,6 +7,7 @@
 
 #include <Wire.h>
 #include <SPI.h>
+#include <SD.h>
 // Add other necessary libraries for the sensors (e.g., MPU6050 for gyro/accelerometer, HMC5883L for magnetometer, etc.)
 
 // Pin Definitions for Mode Selection
@@ -18,7 +19,7 @@
 
 // Error & Status LED Pins
 #define ERROR_LED_PIN 13
-//#define STATUS_GOOD_PIN 14
+//#define STATUS_GOOD_PIN 12
 
 // Flight Plan Timers
 unsigned long flightStartTime = 0;
@@ -30,6 +31,7 @@ float gyroData[3];
 float accelData[3];
 float distanceData = 0.0;
 float headingData = 0.0;
+float groundAltitude = 0.0;
 
 // Mode Enum for Better Readability
 enum Mode {
@@ -42,15 +44,35 @@ enum Mode {
 };
 
 Mode currentMode = MODE_STOPPED;
+Mode lastMode - MODE_STOPPED;
 
 // Log file creation
 File logFile;
 
 // Constants
-float TEST_ALTITUDE = 1.0;
-float TEST_LEVEL_DURATION = 10000;
-float TEST_HOLDING_PATTERN_DURATION = 20000;
+const float TEST_ALTITUDE = 1.0; // meters
+const unsigned long TEST_LEVEL_DURATION = 10000; // milliseconds
+const unsigned long TEST_HOLDING_PATTERN_DURATION = 20000; // milliseconds
+const unsigned long SENSOR_RESET_STATIONARY_DURATION = 10000; // milliseconds
+const unsigned long TAXI_DURATION = 5000; // milliseconds
 
+// ----------------------------  FUNCTION PROTOTYPES  ---------------------------- //
+// Define all function prototypes to avoid compilation errors
+void logEvent(String message);
+Mode checkModePins();
+void takeOff(float targetAltitude);
+void levelFlight(float targetAltitude);
+void land();
+void stopPlane();
+bool isPlaneMoving();
+float getCurrentAltitude();
+bool resetSensors();
+void modeResetSensors();
+void modeStopped();
+void modeTaxi();
+void modeTakeoffLevelLand();
+void modeHoldingPattern();
+void readSensors();
 
 // ----------------------------  SETUP  ---------------------------- //
 void setup() {
@@ -66,7 +88,18 @@ void setup() {
   pinMode(ERROR_LED_PIN, OUTPUT);
   //pinMode(STATUS_GOOD_PIN, OUTPUT);
 
+  // Initialize SD card
+  if (!SD.begin(BUILTIN_CS)) {
+    Serial.println("SD card initialization failed!");
+    digitalWrite(ERROR_LED_PIN, HIGH);
+    while (1); // Halt if SD card fails
+  }
+
   // Initialize sensors here
+  Wire.begin();
+  Serial.println("Sensors Initializing...");
+  // (e.g., MPU6050.begin(), HMC5883L.begin(), etc.)
+  Serial.println("Sensors Initialized.");
 
   // Open the log file
   logFile = SD.open("flight_log.txt", FILE_WRITE);
@@ -77,20 +110,99 @@ void setup() {
   
   // Initialize timer for system uptime
   flightStartTime = millis();
+  modeStartTime = millis();
+
+  // Read initial mode from pins
+  currentMode = checkModePins();
+  lastMode = currentMode;
+  logEvent("Initial mode set to " + String(currentMode));
 }
 
 // ----------------------------  LOOP  ---------------------------- //
 void loop() {
-  // put your main code here, to run repeatedly:
+  // Always read sensor data at the beginning of the loop
+  readSensors();
 
+  // Check the physical mode selection pins
+  currentMode = checkModePins();
+
+  // Handle mode transitions and reset the mode timer
+  if (currentMode != lastMode) {
+    logEvent("Transitioning from Mode " + String(lastMode) + " to Mode " + String(currentMode));
+    modeStartTime = millis();
+    lastMode = currentMode;
+  }
+
+  // Use a state machine pattern to run the current mode's logic
+  // The 'switch' statement is non-blocking and allows the loop to run continuously
+  switch (currentMode) {
+    case MODE_RESET_SENSORS:
+      modeResetSensors();
+      break;
+    case MODE_STOPPED:
+      modeStopped();
+      break;
+    case MODE_TAXI:
+      modeTaxi();
+      break;
+    case MODE_TAKEOFF_LEVEL_LAND:
+      modeTakeoffLevelLand();
+      break;
+    case MODE_HOLDING_PATTERN:
+      modeHoldingPattern();
+      break;
+    default:
+      // Unknown mode, default to stopped and log an error
+      stopPlane();
+      digitalWrite(ERROR_LED_PIN, HIGH);
+      logEvent("Error: Unknown mode selected!");
+      break;
+  }
+}
+
+// ----------------------------  READ SENSORS  ---------------------------- //
+/* Read and store sensor data in appropriate variables. */
+void readSensors() {
+
+}
+
+// ----------------------------  READ MODE PINS  ---------------------------- //
+/* Checks the mode selection pins using the returns corresponding enum. */
+Mode checkModePins() {
+  // Read the state of each pin
+  int pinA = digitalRead(MODE_0);
+  int pinB = digitalRead(MODE_1);
+  int pinC = digitalRead(MODE_2);
+  int pinD = digitalRead(MODE_3);
+  int pinE = digitalRead(MODE_4)
+  
+  // Combine pin states into a binary number
+  // Using INPUT_PULLUP, LOW means the switch is closed.
+  int modeValue = (!pinD << 3) | (!pinC << 2) | (!pinB << 1) | !pinA;
+  
+  // Map binary value to the Mode enum
+  // Example: 0001 -> MODE_RESET_SENSORS
+  // This is a simple example; you can define the mapping as you wish
+  switch (modeValue) {
+    case 1:
+      return MODE_RESET_SENSORS;
+    case 2:
+      return MODE_STOPPED;
+    case 3:
+      return MODE_TAXI;
+    case 4:
+      return MODE_TAKEOFF_LEVEL_LAND;
+    case 5:
+      return MODE_HOLDING_PATTERN;
+    default:
+      return MODE_STOPPED; // Default to a safe stopped mode
+  }
 }
 
 // ----------------------------  MODE 0 (RESET SENSORS)  ---------------------------- //
 /* Flight Plan: Stops the plane then if stationary for duration reset sensors. */
 void modeResetSensors() {
   logEvent("Entered MODE_RESET_SENSORS");
-
-  unsigned long modeDuration = millis() - modeStartTime;
 
   stopPlane();
   
@@ -103,7 +215,7 @@ void modeResetSensors() {
   }
   
   // Check if stationary for x seconds
-  if (modeDuration > 10000) {  // x = 10 seconds for sensor reset, can be changed later
+  if (millis() - modeStartTime > SENSOR_RESET_STATIONARY_DURATION) {  // x = 10 seconds for sensor reset, can be changed later
     if (!resetSensors()) {
       digitalWrite(ERROR_LED_PIN, HIGH); // Turn on the error LED if reset fails
       logEvent("Error: Sensor reset failed!");
@@ -117,8 +229,6 @@ void modeResetSensors() {
 /* Flight Plan: Stops the plane then checks if staionary. */
 void modeStopped() {
   logEvent("Entered MODE_STOPPED");
-  
-  unsigned long modeDuration = millis() - modeStartTime;
 
   stopPlane();
   
@@ -135,14 +245,11 @@ void modeStopped() {
 /* Flight Plan: Taxi the plane for a certain duration. */
 void modeTaxi() {
   logEvent("Entered MODE_STOPPED");
-  
-  unsigned long modeDuration = millis() - modeStartTime;
 
   // Add taxi logic based on distance/time
-  if (modeDuration < 5000) {  // Taxi for 5 seconds (as an example)
+  if (millis() - modeStartTime < TAXI_DURATION) {  // Taxi for 5 seconds (as an example)
     // Code to control the plane's motors for taxiing
-  } else {
-    // Stop and transition to parked state
+  } else {  // Stop and transition to parked state
     stopPlane();
     if (isPlaneMoving()) {
       digitalWrite(ERROR_LED_PIN, HIGH); // Turn on the error LED
@@ -178,7 +285,7 @@ void modeTakeoffLevelLand() {
  
   // Step 3: Landing
   logEvent("Landing...");
-  while (getCurrentAltitude() > ground_Altitude) {
+  while (getCurrentAltitude() > groundAltitude) {
     // This loop will continue until the plane is on the ground (altitude saved from sensor reset).
     land();
   }
@@ -219,7 +326,7 @@ void modeHoldingPattern() {
   
   // Step 3: Landing
   logEvent("Landing...");
-  while (getCurrentAltitude() > ground_Altitude) {
+  while (getCurrentAltitude() > groundAltitude) {
     // This loop will continue until the plane is on the ground (altitude saved from sensor reset).
     land();
   }
@@ -238,14 +345,14 @@ void modeHoldingPattern() {
 
 // ----------------------------  TAKEOFF SEQUENCE  ---------------------------- //
 /* Autopilot for takeoff stage. */
-void takeOff(targetAltitude) {
+void takeOff(float targetAltitude) {
   // Code for increasing altitude until targetAltitude is reached (using distance sensor or altitude control system)
   // Code to increase speed and get the plane airborne
 }
 
 // ----------------------------  MAINTAIN LEVEL FLIGHT  ---------------------------- //
 /* Autopilot for level flight. Takes a altitude target as input and attempts to maintain. */
-void levelFlight(targetAltitude) {
+void levelFlight(float targetAltitude) {
   // Maintain altitude for the given time
   // Use the distance sensor to monitor altitude
   if (getCurrentAltitude() < targetAltitude) {
@@ -288,7 +395,7 @@ float getCurrentAltitude() {
 bool resetSensors() {
   // Reset logic here
   // E.g., set all sensor data to known starting values
-  ground_Altitude = getCurrentAltitude();
+  // groundAltitude = getCurrentAltitude();
   return true;  // Return true if reset successful
 }
 
@@ -319,6 +426,8 @@ void logEvent(String message) {
     logFile.print(" MSEC - ");
     logFile.println(message);
     logFile.close();
+  } else {
+    Serial.println("Error: Failed to open log file for writing!");
   }
   
   // Also print to serial monitor for real-time debugging
