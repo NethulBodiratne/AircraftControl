@@ -296,13 +296,42 @@ bool resetSensors() {
 /* Logs data to file on external memory. */
 void logEvent(String message) {
   unsigned long elapsedTime = millis() - flightStartTime;
+
+  // Calculate time components
+  ms = elapsedTime % 1000;
+  totalSecs = elapsedTime / 1000;
+  secs = totalSecs % 60;
+  totalMins = totalSecs / 60;
+  mins = totalMins % 60;
+
   logFile = SD.open("flight_log.txt", FILE_WRITE);
   if (logFile) {
-    logFile.print("Time: ");
-    logFile.print(elapsedTime);
-    logFile.print("ms - ");
+    logFile.print("Time: ");    // Prints time as XX MIN: YY SEC: ZZZZ MSEC
+    if (minutes < 10) logFile.print("0");
+    logFile.print(minutes);
+    logFile.print(" MIN: ");
+    if (seconds < 10) logFile.print("0");
+    logFile.print(seconds);
+    logFile.print(" SEC: ");
+    if (milliseconds < 100) logFile.print("0");
+    if (milliseconds < 10) logFile.print("0");
+    logFile.print(milliseconds);
+    logFile.print(" MSEC - ");
     logFile.println(message);
     logFile.close();
   }
-  Serial.println(message); // Also print to serial monitor for real-time debugging
+  
+  // Also print to serial monitor for real-time debugging
+  Serial.print("Time: ");
+  if (minutes < 10) Serial.print("0");
+  Serial.print(minutes);
+  Serial.print(" MIN: ");
+  if (seconds < 10) Serial.print("0");
+  Serial.print(seconds);
+  Serial.print(" SEC: ");
+  if (milliseconds < 100) Serial.print("0");
+  if (milliseconds < 10) Serial.print("0");
+  Serial.print(milliseconds);
+  Serial.print(" MSEC - ");
+  Serial.println(message);
 }
