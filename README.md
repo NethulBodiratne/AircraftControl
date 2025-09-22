@@ -1,2 +1,2 @@
 # AircraftControl
-Python code that senses orientation of and aircraft and adjusts accordingly
+Python code that senses the orientation of an aircraft and adjusts accordingly
