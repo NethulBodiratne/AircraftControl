@@ -1,7 +1,7 @@
 /* ----------------------------  ARDUINO AIRPLANE CONTROL  ---------------------------- */
 /* 
   Nethul Bodiratne 
-  Last updated: 9/19/2025
+  Last updated: 9/22/2025
 */
 /* ----------------------------    ---------------------------- */
 
@@ -55,6 +55,14 @@ const unsigned long TEST_LEVEL_DURATION = 10000; // milliseconds
 const unsigned long TEST_HOLDING_PATTERN_DURATION = 20000; // milliseconds
 const unsigned long SENSOR_RESET_STATIONARY_DURATION = 10000; // milliseconds
 const unsigned long TAXI_DURATION = 5000; // milliseconds
+const float MIN_TAKEOFF_SPEED = 15; // m/s
+const float MIN_THROTTLE = 0.0; // minimum throttle power
+const float MAX_THROTLE = 1.0; // maximum throttle power
+const float THROTTLE_STEP = 0.05; // step throttle power by 5%
+const float LEVEL_ELEVATOR = 0.0; // elevator angle for level flight
+const float MIN_ELEVATOR = -15.0; // minimum elevator angle in degrees (TE up)
+const float MAX_ELEVATOR = 15.0; // maximum elevator angle in degrees (TE down)
+const float ELEVATOR_STEP = 1.0; // step elevator angle by 1 degree
 
 // ----------------------------  FUNCTION PROTOTYPES  ---------------------------- //
 // Define all function prototypes to avoid compilation errors
@@ -348,6 +356,28 @@ void modeHoldingPattern() {
 void takeOff(float targetAltitude) {
   // Code for increasing altitude until targetAltitude is reached (using distance sensor or altitude control system)
   // Code to increase speed and get the plane airborne
+  // Step 1: Increase throttle until takeoff speed is reached
+  while (getCurrentSpeed() < MIN_TAKEOFF_SPEED) {
+    throttle = getThrottle();
+    if (throttle < MAX_THROTLE) {
+      throttle += THROTTLE_STEP;
+      if (throttle > MAX_THROTLE) throttle = MAX_THROTLE;
+      setThrottle(throttle);
+    }
+    // delay(100); // Small delay between throttle increases. Smooths the acceleration.
+  }
+  // Step 2: Pitch airplane up to take off
+  while (getCurrentAltitude() < targetAltitude) {
+    elevatorAngle = getElevatorAngle();
+    if (elevatorAngle < MAX_ELEVATOR) {
+      elevatorAngle += ELEVATOR_STEP;
+      if (elevatorAngle > MAX_ELEVATOR) elevatorAngle = MAX_ELEVATOR;
+      setElevator(elevatorAngle);
+    }
+    // delay(100); // Small delay to smooth elevator angle increase.
+  }
+  // Step 3: Level off once the plane reaches target altitude
+  setElevator(LEVEL_ELEVATOR);
 }
 
 // ----------------------------  MAINTAIN LEVEL FLIGHT  ---------------------------- //
@@ -374,6 +404,8 @@ void land() {
 void stopPlane() {
   // to be completed.
   // Set motors to 0. set control surfaces to neutral.
+  setThrottle(0.0);
+  setElevator(0.0);
 }
 
 // ----------------------------  CHECK IF MOVING  ---------------------------- //
@@ -390,6 +422,24 @@ float getCurrentAltitude() {
   // return altitude; // Returns the value from the distance sensor that is pointed at the ground to get altitude
 }
 
+// ----------------------------  CURRENT SPEED  ---------------------------- //
+/* Get the current speed. */
+float getCurrentSpeed() {
+  // return speed; // Return the speed
+}
+
+// ----------------------------  CURRENT THROTTLE  ---------------------------- //
+/* Gets the current throttle value. */
+float getThrottle() {
+  // return currentThrottle; // Return the throttle power
+}
+
+// ----------------------------  CURRENT ELEVATOR ANGLE  ---------------------------- //
+/* Gets the current elevator angle. */
+float getElevatorAngle() {
+  // return currentElevator; // Return the elevator angle
+}
+
 // ----------------------------  RESET SENSORS  ---------------------------- //
 /* Resets sensors to default values. */
 bool resetSensors() {
@@ -397,6 +447,18 @@ bool resetSensors() {
   // E.g., set all sensor data to known starting values
   // groundAltitude = getCurrentAltitude();
   return true;  // Return true if reset successful
+}
+
+// ----------------------------  SET THROTTLE  ---------------------------- //
+/* Sets the throttle value between 0.0 and 1.0. */
+void setThrottle(float throttleValue) {
+  // return ; // Set the throttle power
+}
+
+// ----------------------------  SET ELEVATOR  ---------------------------- //
+/* Sets the elevator angle to control aircraft pitch. */
+void setElevator(float elevatorAngle) {
+  // return ; // Set the elevator angle
 }
 
 // ----------------------------  LOG TO FILE  ---------------------------- //
