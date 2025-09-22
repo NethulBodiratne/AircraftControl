@@ -416,10 +416,10 @@ void logEvent(String message) {
     logFile.print("Time: ");    // Prints time as XX MIN: YY SEC: ZZZZ MSEC
     if (minutes < 10) logFile.print("0");
     logFile.print(minutes);
-    logFile.print(" MIN: ");
+    logFile.print(" MIN : ");
     if (seconds < 10) logFile.print("0");
     logFile.print(seconds);
-    logFile.print(" SEC: ");
+    logFile.print(" SEC : ");
     if (milliseconds < 100) logFile.print("0");
     if (milliseconds < 10) logFile.print("0");
     logFile.print(milliseconds);
@@ -434,10 +434,10 @@ void logEvent(String message) {
   Serial.print("Time: ");
   if (minutes < 10) Serial.print("0");
   Serial.print(minutes);
-  Serial.print(" MIN: ");
+  Serial.print(" MIN : ");
   if (seconds < 10) Serial.print("0");
   Serial.print(seconds);
-  Serial.print(" SEC: ");
+  Serial.print(" SEC : ");
   if (milliseconds < 100) Serial.print("0");
   if (milliseconds < 10) Serial.print("0");
   Serial.print(milliseconds);
