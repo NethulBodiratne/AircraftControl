@@ -50,6 +50,7 @@ Mode lastMode - MODE_STOPPED;
 File logFile;
 
 // Constants
+const float LANDING_FLARE_ALTITUDE = 0.25; // meters
 const float TEST_ALTITUDE = 1.0; // meters
 const unsigned long TEST_LEVEL_DURATION = 10000; // milliseconds
 const unsigned long TEST_HOLDING_PATTERN_DURATION = 20000; // milliseconds
@@ -358,7 +359,7 @@ void takeOff(float targetAltitude) {
   // Code to increase speed and get the plane airborne
   // Step 1: Increase throttle until takeoff speed is reached
   while (getCurrentSpeed() < MIN_TAKEOFF_SPEED) {
-    throttle = getThrottle();
+    float throttle = getThrottle();
     if (throttle < MAX_THROTLE) {
       throttle += THROTTLE_STEP;
       if (throttle > MAX_THROTLE) throttle = MAX_THROTLE;
@@ -368,7 +369,7 @@ void takeOff(float targetAltitude) {
   }
   // Step 2: Pitch airplane up to take off
   while (getCurrentAltitude() < targetAltitude) {
-    elevatorAngle = getElevatorAngle();
+    float elevatorAngle = getElevatorAngle();
     if (elevatorAngle < MAX_ELEVATOR) {
       elevatorAngle += ELEVATOR_STEP;
       if (elevatorAngle > MAX_ELEVATOR) elevatorAngle = MAX_ELEVATOR;
@@ -385,10 +386,18 @@ void takeOff(float targetAltitude) {
 void levelFlight(float targetAltitude) {
   // Maintain altitude for the given time
   // Use the distance sensor to monitor altitude
-  if (getCurrentAltitude() < targetAltitude) {
-    // Adjust motor speed and/or control surfaces to maintain altitude target
+  float currentAltitude = getCurrentAltitude();
+  float altitudeTolerance = 0.1; // Altitude must be +-0.1 of the target
+
+  if (currentAltitude < targetAltitude - altitudeTolerance) {
+    // Too low - adjust speed and/or control surfaces
+    setElevator(ELEVATOR_STEP);
+  } else if (currentAltitude > targetAltitude + altitudeTolerance) {
+    // Too high - adjust speed and/or control surfaces
+    setElevator(-ELEVATOR_STEP);
   } else {
-    // Adjust speed and/or control surfaces if too high/low
+    // Altitude good
+    setElevator(LEVEL_ELEVATOR);
   }
 }
 
@@ -397,6 +406,14 @@ void levelFlight(float targetAltitude) {
 void land() {
   // Decrease altitude and safely land the plane by reducing throttle and/or control surfaces
   // Use distance sensor to guide the plane to the ground
+  float currentAltitude = getCurrentAltitude();
+  while (currentAltitude > LANDING_FLARE_ALTITUDE) {
+    float throttle = getThrottle();
+    if (throttle > MIN_THROTTLE) {
+      throttle -= THROTTLE_STEP;
+      setThrottle(throttle);
+    }
+  }
 }
 
 // ----------------------------  STOP PLANE  ---------------------------- //
