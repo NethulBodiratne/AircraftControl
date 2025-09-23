@@ -32,6 +32,14 @@ float accelData[3];
 float distanceData = 0.0;
 float headingData = 0.0;
 float groundAltitude = 0.0;
+float rollAngle = 0.0;
+
+// Control Surface Variables
+float currentThrottle = 0.0;
+float currentElevator = 0.0;
+float currentAileronLeft = 0.0;
+float currentAileronRight = 0.0;
+float currentRudder = 0.0;
 
 // Mode Enum for Better Readability
 enum Mode {
@@ -46,20 +54,32 @@ enum Mode {
 Mode currentMode = MODE_STOPPED;
 Mode lastMode - MODE_STOPPED;
 
+// Flight State Enum for complex flight modes
+enum FlightState {
+  STATE_START,
+  STATE_TAKEOFF,
+  STATE_LEVEL_FLIGHT,
+  STATE_HOLDING_PATTERN,
+  STATE_LANDING,
+  STATE_PARKED
+};
+
+FlightState currentFlightState = STATE_START;
+
 // Log file creation
 File logFile;
 
 // Constants
-const float LANDING_FLARE_ALTITUDE = 0.25; // meters
-const float ROLL_TOLERANCE = 1.0; // degrees
-const float TEST_ALTITUDE = 1.0; // meters
-const unsigned long TEST_LEVEL_DURATION = 10000; // milliseconds
-const unsigned long TEST_HOLDING_PATTERN_DURATION = 20000; // milliseconds
-const unsigned long SENSOR_RESET_STATIONARY_DURATION = 10000; // milliseconds
-const unsigned long TAXI_DURATION = 5000; // milliseconds
-const float MIN_TAKEOFF_SPEED = 15; // m/s
-const float MIN_THROTTLE = 0.0; // minimum throttle power
-const float MAX_THROTLE = 1.0; // maximum throttle power
+const float LANDING_FLARE_ALTITUDE = 0.25; // meters - The altitude at which the plane initiates the flare maneuver.
+const float ROLL_TOLERANCE = 1.0; // degrees - The acceptable tolerance for the plane's roll angle.
+const float TEST_ALTITUDE = 10.0; // meters - Target altitude for test flights.
+const unsigned long TEST_LEVEL_DURATION = 10000; // milliseconds - Duration for maintaining level flight.
+const unsigned long TEST_HOLDING_PATTERN_DURATION = 20000; // milliseconds - Duration for circular holding pattern.
+const unsigned long SENSOR_RESET_STATIONARY_DURATION = 10000; // milliseconds - Duration the plane must be stationary for a sensor reset.
+const unsigned long TAXI_DURATION = 5000; // milliseconds - Duration for taxiing on the runway.
+const float MIN_TAKEOFF_SPEED = 15; // m/s - The minimum speed required for takeoff.
+const float MIN_THROTTLE = 0.0; // minimum throttle power (0.0 to 1.0)
+const float MAX_THROTTLE = 1.0; // maximum throttle power (0.0 to 1.0)
 const float THROTTLE_STEP = 0.05; // step throttle power by 5%
 const float LEVEL_ELEVATOR = 0.0; // elevator angle for level flight
 const float MIN_ELEVATOR = -15.0; // minimum elevator angle in degrees (TE up)
@@ -67,25 +87,48 @@ const float MAX_ELEVATOR = 15.0; // maximum elevator angle in degrees (TE down)
 const float ELEVATOR_STEP = 1.0; // step elevator angle by 1 degree
 const float MIN_AILERON = -15.0; // minimum aileron angle in degrees
 const float MAX_AILERON = 15.0; // maximum aileron angle in degrees
-const float AILERON_STEP - 1.0; // step ailerons angle by 1 degree
+const float AILERON_STEP = 1.0; // step ailerons angle by 1 degree
+const float MIN_RUDDER = -15.0; // rudder full left angle
+const float MAX_RUDDER = 15.0; // rudder full right angle
+const float RUDDER_STEP = 1.0; // step rudder angle by 1 degree
+const float FLARE_ELEVATOR_ANGLE = 10.0; // degrees - The elevator angle for the landing flare.
+const float FLARE_AILERON_ANGLE = 5.0; // degrees - Aileron angle to maintain stability during flare.
 
 // ----------------------------  FUNCTION PROTOTYPES  ---------------------------- //
 // Define all function prototypes to avoid compilation errors
 void logEvent(String message);
 Mode checkModePins();
-void takeOff(float targetAltitude);
-void levelFlight(float targetAltitude);
-void land();
+void readSensors();
 void stopPlane();
 bool isPlaneMoving();
 float getAltitude();
+float getSpeed();
+float getThrottle();
+float getElevatorAngle();
+float getAileronLeftAngle();
+float getAileronRightAngle();
+float getRudderAngle();
+float getRollAngle();
 bool resetSensors();
+void setThrottle(float throttleValue);
+void setElevator(float elevatorAngle);
+void setAileronLeft(float aileronAngle);
+void setAileronRight(float aileronAngle);
+void setRudder(float rudderAngle);
+void levelRoll();
+void holdingPattern();
+
+// Mode functions
 void modeResetSensors();
 void modeStopped();
 void modeTaxi();
 void modeTakeoffLevelLand();
 void modeHoldingPattern();
-void readSensors();
+
+// Flight Sequence functions
+void takeOff(float targetAltitude);
+void levelFlight(float targetAltitude);
+void land();
 
 // ----------------------------  SETUP  ---------------------------- //
 void setup() {
@@ -260,9 +303,11 @@ void modeTaxi() {
   logEvent("Entered MODE_STOPPED");
 
   // Add taxi logic based on distance/time
-  if (millis() - modeStartTime < TAXI_DURATION) {  // Taxi for 5 seconds (as an example)
+  if (millis() - modeStartTime < TAXI_DURATION) { // Taxi for 5 seconds (as an example)
     // Code to control the plane's motors for taxiing
-  } else {  // Stop and transition to parked state
+    setThrottle(0.2); // Example throttle for taxiing, can be changed to setThrottle(TAXI_THROTTLE)
+    setRudder(0.0);
+  } else { // Stop and transition to parked state
     stopPlane();
     if (isPlaneMoving()) {
       digitalWrite(ERROR_LED_PIN, HIGH); // Turn on the error LED
@@ -281,37 +326,57 @@ void modeTakeoffLevelLand() {
   
   unsigned long modeDuration = millis() - modeStartTime;
   
-  // Step 1: Takeoff
-  logEvent("Taking off...");
-  while (getAltitude() < TEST_ALTITUDE) {
-    takeOff(TEST_ALTITUDE);
-  }
-  logEvent("Reached target altitude. Transitioning to level flight.");
+  switch (currentFlightState) {
+    case STATE_START:
+      logEvent("Starting takeoff sequence.");
+      currentFlightState = STATE_TAKEOFF;
+      stepStartTime = millis();
+      break;
 
-  // Step 2: Level Flight
-  logEvent("Flying level...");
-  long startTime = getMillis();
-  while (getMillis() - startTime < TEST_LEVEL_DURATION) {
-    levelFlight(TEST_ALTITUDE);
-  }
-  logEvent("Level flight duration complete. Transitioning to landing.");
- 
-  // Step 3: Landing
-  logEvent("Landing...");
-  while (getAltitude() > groundAltitude) {
-    // This loop will continue until the plane is on the ground (altitude saved from sensor reset).
-    land();
-  }
-  logEvent("Landed successfully. Transitioning to parking.");
+    // Step 1: Takeoff
+    case STATE_TAKEOFF:
+      if (getAltitude() < TEST_ALTITUDE) {
+        takeOff(TEST_ALTITUDE);
+      } else {
+        logEvent("Reached target altitude. Transitioning to level flight.");
+        currentFlightState = STATE_LEVEL_FLIGHT;
+        stepStartTime = millis();
+      }
+      break;
+      
+    // Step 2: Level Flight
+    case STATE_LEVEL_FLIGHT:
+      if (millis() - stepStartTime < TEST_LEVEL_DURATION) {
+        levelFlight(TEST_ALTITUDE);
+      } else {
+        logEvent("Level flight duration complete. Transitioning to landing.");
+        currentFlightState = STATE_LANDING;
+        stepStartTime = millis();
+      }
+      break;
+    
+    // Step 3: Landing
+    case STATE_LANDING:
+      if (getAltitude() > groundAltitude) {
+        land();
+      } else {
+        logEvent("Landed successfully. Transitioning to parked state.");
+        currentFlightState = STATE_PARKED;
+        stepStartTime = millis();
+      }
+      break;
 
-  // Step 4: Park
-  stopPlane();
-  if (isPlaneMoving()) {
-    digitalWrite(ERROR_LED_PIN, HIGH); // Turn on the error LED
-    logEvent("Error: Plane is not stationary as expected!");
-  } else {
-    digitalWrite(ERROR_LED_PIN, LOW); // Turn off the error LED
-    logEvent("Plane has landed and stopped.");
+    // Step 4: Park
+    case STATE_PARKED:
+      stopPlane();
+      if (isPlaneMoving()) {
+        digitalWrite(ERROR_LED_PIN, HIGH); // Turn on the error LED
+        logEvent("Error: Plane is not stationary as expected!");
+      } else {
+        digitalWrite(ERROR_LED_PIN, LOW); // Turn off the error LED
+        logEvent("Plane has landed and stopped.");
+      }
+      break;
   }
 }
 
@@ -320,39 +385,57 @@ void modeTakeoffLevelLand() {
 void modeHoldingPattern() {
   logEvent("Entered MODE_HOLDING_PATTERN");
 
-  unsigned long modeDuration = millis() - modeStartTime;
+  switch (currentFlightState) {
+    case STATE_START:
+      logEvent("Starting takeoff sequence for holding pattern.");
+      currentFlightState = STATE_TAKEOFF;
+      stepStartTime = millis();
+      break;
+    
+    // Step 1: Take off
+    case STATE_TAKEOFF:
+      if (getAltitude() < TEST_ALTITUDE) {
+        takeOff(TEST_ALTITUDE);
+      } else {
+        logEvent("Reached target altitude. Transitioning to holding pattern.");
+        currentFlightState = STATE_HOLDING_PATTERN;
+        stepStartTime = millis();
+      }
+      break;
+    
+    // Step 2: Hold Constant Turn
+    case STATE_HOLDING_PATTERN:
+      if (millis() - stepStartTime < TEST_HOLDING_PATTERN_DURATION) {
+        holdingPattern();
+      } else {
+        logEvent("Holding pattern complete. Transitioning to landing.");
+        currentFlightState = STATE_LANDING;
+        stepStartTime = millis();
+      }
+      break;
+      
+    // Step 3: Landing
+    case STATE_LANDING:
+      if (getAltitude() > groundAltitude) {
+        land();
+      } else {
+        logEvent("Landed successfully. Transitioning to parked state.");
+        currentFlightState = STATE_PARKED;
+        stepStartTime = millis();
+      }
+      break;
 
-  // Step 1: Takeoff
-  logEvent("Taking off...");
-  while (getAltitude() < TEST_ALTITUDE) {
-    takeOff(TEST_ALTITUDE);
-  }
-  logEvent("Reached target altitude. Transitioning to level flight.");
-
-  // Step 2: Circle and hold
-  logEvent("Flying in circular holding pattern...");
-  long holdingPatternStartTime = getMillis();
-  while (getMillis() - holdingPatternStartTime < TEST_HOLDING_PATTERN_DURATION) {
-    holdingPattern();
-  }
-  logEvent("Holding pattern complete. Transitioning to landing.");
-  
-  // Step 3: Landing
-  logEvent("Landing...");
-  while (getAltitude() > groundAltitude) {
-    // This loop will continue until the plane is on the ground (altitude saved from sensor reset).
-    land();
-  }
-  logEvent("Landed successfully. Transitioning to parking.");
-
-  // Step 4: Park
-  stopPlane();
-  if (isPlaneMoving()) {
-    digitalWrite(ERROR_LED_PIN, HIGH); // Turn on the error LED
-    logEvent("Error: Plane is not stationary as expected!");
-  } else {
-    digitalWrite(ERROR_LED_PIN, LOW); // Turn off the error LED
-    logEvent("Plane has landed and stopped.");
+    // Step 4: Park
+    case STATE_PARKED:
+      stopPlane();
+      if (isPlaneMoving()) {
+        digitalWrite(ERROR_LED_PIN, HIGH); // Turn on the error LED
+        logEvent("Error: Plane is not stationary as expected!");
+      } else {
+        digitalWrite(ERROR_LED_PIN, LOW); // Turn off the error LED
+        logEvent("Plane has landed and stopped.");
+      }
+      break;
   }
 }
 
@@ -361,25 +444,22 @@ void modeHoldingPattern() {
 void takeOff(float targetAltitude) {
   // Code for increasing altitude until targetAltitude is reached (using distance sensor or altitude control system)
   // Code to increase speed and get the plane airborne
-  // Step 1: Increase throttle until takeoff speed is reached
-  while (getSpeed() < MIN_TAKEOFF_SPEED) {
-    float throttle = getThrottle();
-    if (throttle < MAX_THROTLE) {
-      throttle += THROTTLE_STEP;
-      if (throttle > MAX_THROTLE) throttle = MAX_THROTLE;
-      setThrottle(throttle);
+  // Use a non-blocking approach with millis()
+  static unsigned long lastCheckTime = 0;
+  if (millis() - lastCheckTime > 100) {
+    lastCheckTime = millis();
+    // Step 1: Increase throttle until takeoff speed is reached
+    if (getSpeed() < MIN_TAKEOFF_SPEED) {
+      if (getThrottle() < MAX_THROTTLE) {
+        setThrottle(getThrottle() + THROTTLE_STEP);
+      }
     }
-    // delay(100); // Small delay between throttle increases. Smooths the acceleration.
-  }
-  // Step 2: Pitch airplane up to take off
-  while (getAltitude() < targetAltitude) {
-    float elevatorAngle = getElevatorAngle();
-    if (elevatorAngle < MAX_ELEVATOR) {
-      elevatorAngle += ELEVATOR_STEP;
-      if (elevatorAngle > MAX_ELEVATOR) elevatorAngle = MAX_ELEVATOR;
-      setElevator(elevatorAngle);
+    // Step 2: Pitch airplane up to take off
+    if (getAltitude() < targetAltitude) {
+      if (getElevatorAngle() < MAX_ELEVATOR) {
+        setElevator(getElevatorAngle() + ELEVATOR_STEP);
+      }
     }
-    // delay(100); // Small delay to smooth elevator angle increase.
   }
   // Step 3: Level off once the plane reaches target altitude
   setElevator(LEVEL_ELEVATOR);
@@ -388,58 +468,69 @@ void takeOff(float targetAltitude) {
 // ----------------------------  MAINTAIN LEVEL FLIGHT  ---------------------------- //
 /* Autopilot for level flight. Takes a altitude target as input and attempts to maintain. */
 void levelFlight(float targetAltitude) {
-  // Maintain altitude for the given time
-  // Use the distance sensor to monitor altitude
-  float currentAltitude = getAltitude();
-  float altitudeTolerance = 0.1; // Altitude must be +-0.1 of the target
+  static unsigned long lastCheckTime = 0;
+  if (millis() - lastCheckTime > 100) {
+    lastCheckTime = millis();
+    // Maintain altitude for the given time
+    // Use the distance sensor to monitor altitude
+    float currentAltitude = getAltitude();
+    float altitudeTolerance = 0.5; // Altitude must be +-0.5 of the target
 
-  if (currentAltitude < targetAltitude - altitudeTolerance) {
-    // Too low - adjust speed and/or control surfaces
-    setElevator(ELEVATOR_STEP);
-  } else if (currentAltitude > targetAltitude + altitudeTolerance) {
-    // Too high - adjust speed and/or control surfaces
-    setElevator(-ELEVATOR_STEP);
-  } else {
-    // Altitude good
-    setElevator(LEVEL_ELEVATOR);
+    if (currentAltitude < targetAltitude - altitudeTolerance) {
+      // Too low - adjust control surfaces
+      setElevator(ELEVATOR_STEP);
+    } else if (currentAltitude > targetAltitude + altitudeTolerance) {
+      // Too high - adjust control surfaces
+      setElevator(-ELEVATOR_STEP);
+    } else {
+      // Altitude good
+      setElevator(LEVEL_ELEVATOR);
+    }
+    levelRoll(); // Maintain level roll during flight
   }
 }
 
 // ----------------------------  LANDING SEQUENCE  ---------------------------- //
 /* Autopilot for landing sequence.  */
 void land() {
-  // Decrease altitude and safely land the plane by reducing throttle and/or control surfaces
-  // Use distance sensor to guide the plane to the ground
-  float currentAltitude = getAltitude();
-  while (currentAltitude > LANDING_FLARE_ALTITUDE) { // Reduce speed until flare altitude is reached
-    float throttle = getThrottle();
-    if (throttle > MIN_THROTTLE) {
-      throttle -= THROTTLE_STEP;
-      setThrottle(throttle);
-    }
-    // delay(100);
-  }
-  // Once flare height is reached increase elevator and ailerons to flare
-  // Set ailerons to 0.0 to level the roll of the plane
-  setAileronLeft(0.0);
-  setAileronRight(0.0);
-  while (currentAltitude > groundAltitude) {
-    float leftAileron = getAileronLeftAngle();
-    float rightAileron = getAileronRightAngle();
-    while (leftAileron < MAX_AILERON && rightAileron < MAX_AILERON) {
-      leftAileron += AILERON_STEP;
-      rightAileron += AILERON_STEP;
-      setAileronLeft(leftAileron);
-      setAileronRight(rightAileron);
-      // delay(100);
+  static unsigned long lastCheckTime = 0;
+  if (millis() - lastCheckTime > 100) {
+    lastCheckTime = millis();
+    float currentAltitude = getAltitude();
+    
+    if (currentAltitude > LANDING_FLARE_ALTITUDE) {
+      // Decrease altitude and safely land the plane by reducing throttle and/or control surfaces
+      float throttle = getThrottle();
+      if (throttle > MIN_THROTTLE) {
+        throttle -= THROTTLE_STEP;
+        setThrottle(throttle);
+      }
+      // setElevator(-ELEVATOR_STEP); // Pitch down slowly
+    } else {
+      // Once flare height is reached, increase elevator for flare and level roll
+      setThrottle(MIN_THROTTLE);
+      setElevator(FLARE_ELEVATOR_ANGLE);
+      setAileronLeft(FLARE_AILERON_ANGLE);
+      setAileronRight(FLARE_AILERON_ANGLE);
     }
   }
+}
+
+// ---------------------------- HOLDING PATTERN ---------------------------- //
+/* Controls the plane to maintain a circular holding pattern. */
+void holdingPattern() {
+  // Example logic:
+  // Maintain altitude
+  levelFlight(TEST_ALTITUDE);
+  // Apply a constant roll and rudder for a circular turn
+  setAileronLeft(-10.0);
+  setAileronRight(10.0);
+  setRudder(-5.0);
 }
 
 // ----------------------------  STOP PLANE  ---------------------------- //
 /* Stops the plane. */
 void stopPlane() {
-  // to be completed.
   // Set motors to 0. set control surfaces to neutral.
   setThrottle(0.0);
   setElevator(0.0);
@@ -451,25 +542,25 @@ void stopPlane() {
 // ----------------------------  LEVEL ROLL  ---------------------------- //
 /* Pulls the plane out of a roll. */
 void levelRoll() {
-  // First get current aileron angles
-  float leftAileron = getAileronLeftAngle();
-  float rightAileron = getAileronRightAngle();
-  float rollAngle = getRollAngle();
-
-  while (abs(rollAngle) > ROLL_TOLERANCE) { // Correct roll while outside of tolerance
-    float correction = -rollAngle * 0.5; // Proportional contol (must be tuned)
-    // Clamp correction angle to ensure it doesnt exceed maximum aileron angle
-    if (correction > MAX_AILERON) correction = MAX_AILERON;
-    if (correction < MIN_AILERON) correction = MIN_AILERON;
-    // Set ailerons to counteract roll
-    setAileronLeft(-correction);
-    setAileronRight(correction);
-    // delay(100);
+  static unsigned long lastCheckTime = 0;
+  if (millis() - lastCheckTime > 100) {
+    lastCheckTime = millis();
+    float rollAngle = getRollAngle();
+    
+    if (abs(rollAngle) > ROLL_TOLERANCE) {
+      float correction = -rollAngle * 0.5; // Proportional control (must be tuned)
+      // Clamp correction angle to ensure it doesn't exceed maximum aileron angle
+      if (correction > MAX_AILERON) correction = MAX_AILERON;
+      if (correction < MIN_AILERON) correction = MIN_AILERON;
+      // Set ailerons to counteract roll
+      setAileronLeft(-correction);
+      setAileronRight(correction);
+    } else {
+      // Finally, set ailerons to 0.0 to keep plane level
+      setAileronLeft(0.0);
+      setAileronRight(0.0);
+    }
   }
-  // Finally, set ailerons to 0.0 to keep plane level
-  setAileronLeft(0.0);
-  setAileronRight(0.0);
-  // return ;
 }
 
 // ----------------------------  CHECK IF MOVING  ---------------------------- //
@@ -534,36 +625,42 @@ bool resetSensors() {
   // Reset logic here
   // E.g., set all sensor data to known starting values
   // groundAltitude = getAltitude();
+  // Example: MPU6050.calibrate();
   return true;  // Return true if reset successful
 }
 
 // ----------------------------  SET THROTTLE  ---------------------------- //
 /* Sets the throttle value between 0.0 and 1.0. */
 void setThrottle(float throttleValue) {
+  // currentThrottle = max(MIN_THROTTLE, min(MAX_THROTTLE, throttleValue));
   // return ; // Set the throttle power
 }
 
 // ----------------------------  SET ELEVATOR  ---------------------------- //
 /* Sets the elevator angle to control aircraft pitch. */
 void setElevator(float elevatorAngle) {
+  // currentElevator = max(MIN_ELEVATOR, min(MAX_ELEVATOR, elevatorAngle));
   // return ; // Set the elevator angle
 }
 
 // ----------------------------  SET LEFT AILERON  ---------------------------- //
 /* Sets the left aileron angle to control roll. */
 float setAileronLeft() {
+  // currentAileronLeft = max(MIN_AILERON, min(MAX_AILERON, aileronAngle));
   // return ;
 }
 
 // ----------------------------  SET RIGHT AILERON  ---------------------------- //
 /* Sets the right aileron angle to control roll. */
 float setAileronRight() {
+  // currentAileronRight = max(MIN_AILERON, min(MAX_AILERON, aileronAngle));
   // return ;
 }
 
 // ----------------------------  SET RUDDER  ---------------------------- //
 /* Sets the rudder angle to control yaw. */
 float setRudder() {
+  // currentRudder = max(MIN_RUDDER, min(MAX_RUDDER, rudderAngle));
   // return ;
 }
 
@@ -573,11 +670,11 @@ void logEvent(String message) {
   unsigned long elapsedTime = millis() - flightStartTime;
 
   // Calculate time components
-  ms = elapsedTime % 1000;
-  totalSecs = elapsedTime / 1000;
-  secs = totalSecs % 60;
-  totalMins = totalSecs / 60;
-  mins = totalMins % 60;
+  unsigned long milliseconds = elapsedTime % 1000;
+  unsigned long totalSeconds = elapsedTime / 1000;
+  unsigned long seconds = totalSeconds % 60;
+  unsigned long totalMinutes = totalSeconds / 60;
+  unsigned long minutes = totalMinutes % 60;
 
   logFile = SD.open("flight_log.txt", FILE_WRITE);
   if (logFile) {
