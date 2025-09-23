@@ -3,7 +3,7 @@
   Nethul Bodiratne 
   Last updated: 9/23/2025
 */
-/* ----------------------------    ---------------------------- */
+/* ------------------------------------------------------------------------------------ */
 
 #include <Wire.h>
 #include <SPI.h>
@@ -27,8 +27,8 @@ unsigned long modeStartTime = 0;
 unsigned long stepStartTime = 0;
 
 // Sensor data variables
-float gyroData[3];
-float accelData[3];
+float gyroData[3] = {0.0, 0.0, 0.0};
+float accelData[3] = {0.0, 0.0, 0.0};
 float distanceData = 0.0;
 float headingData = 0.0;
 float groundAltitude = 0.0;
@@ -52,7 +52,7 @@ enum Mode {
 };
 
 Mode currentMode = MODE_STOPPED;
-Mode lastMode - MODE_STOPPED;
+Mode lastMode = MODE_STOPPED;
 
 // Flight State Enum for complex flight modes
 enum FlightState {
@@ -68,6 +68,7 @@ FlightState currentFlightState = STATE_START;
 
 // Log file creation
 File logFile;
+bool sdCardAvailable = false;
 
 // Constants
 const float LANDING_FLARE_ALTITUDE = 0.25; // meters - The altitude at which the plane initiates the flare maneuver.
@@ -81,21 +82,22 @@ const float MIN_TAKEOFF_SPEED = 15; // m/s - The minimum speed required for take
 const float MIN_THROTTLE = 0.0; // minimum throttle power (0.0 to 1.0)
 const float MAX_THROTTLE = 1.0; // maximum throttle power (0.0 to 1.0)
 const float THROTTLE_STEP = 0.05; // step throttle power by 5%
-const float LEVEL_ELEVATOR = 0.0; // elevator angle for level flight
-const float MIN_ELEVATOR = -15.0; // minimum elevator angle in degrees (TE up)
-const float MAX_ELEVATOR = 15.0; // maximum elevator angle in degrees (TE down)
-const float ELEVATOR_STEP = 1.0; // step elevator angle by 1 degree
-const float MIN_AILERON = -15.0; // minimum aileron angle in degrees
-const float MAX_AILERON = 15.0; // maximum aileron angle in degrees
-const float AILERON_STEP = 1.0; // step ailerons angle by 1 degree
-const float MIN_RUDDER = -15.0; // rudder full left angle
-const float MAX_RUDDER = 15.0; // rudder full right angle
-const float RUDDER_STEP = 1.0; // step rudder angle by 1 degree
+const float LEVEL_ELEVATOR = 0.0; // degrees - elevator angle for level flight
+const float MIN_ELEVATOR = -15.0; // degrees - minimum elevator angle (TE up)
+const float MAX_ELEVATOR = 15.0; // degrees - maximum elevator angle (TE down)
+const float ELEVATOR_STEP = 1.0; // degrees - step elevator angle by 1
+const float MIN_AILERON = -15.0; // degrees - minimum aileron angle
+const float MAX_AILERON = 15.0; // degrees - maximum aileron angle
+const float AILERON_STEP = 1.0; // degrees - step ailerons angle by 1
+const float MIN_RUDDER = -15.0; // degrees - rudder full left angle
+const float MAX_RUDDER = 15.0; // degrees - rudder full right angle
+const float RUDDER_STEP = 1.0; // degrees - step rudder angle by 1
 const float FLARE_ELEVATOR_ANGLE = 10.0; // degrees - The elevator angle for the landing flare.
 const float FLARE_AILERON_ANGLE = 5.0; // degrees - Aileron angle to maintain stability during flare.
 
 // ----------------------------  FUNCTION PROTOTYPES  ---------------------------- //
 // Define all function prototypes to avoid compilation errors
+// General Utility Functions
 void logEvent(String message);
 Mode checkModePins();
 void readSensors();
@@ -110,13 +112,13 @@ float getAileronRightAngle();
 float getRudderAngle();
 float getRollAngle();
 bool resetSensors();
+
+// Control surface Functions
 void setThrottle(float throttleValue);
 void setElevator(float elevatorAngle);
 void setAileronLeft(float aileronAngle);
 void setAileronRight(float aileronAngle);
 void setRudder(float rudderAngle);
-void levelRoll();
-void holdingPattern();
 
 // Mode functions
 void modeResetSensors();
@@ -128,6 +130,8 @@ void modeHoldingPattern();
 // Flight Sequence functions
 void takeOff(float targetAltitude);
 void levelFlight(float targetAltitude);
+void levelRoll();
+void holdingPattern();
 void land();
 
 // ----------------------------  SETUP  ---------------------------- //
@@ -148,8 +152,16 @@ void setup() {
   if (!SD.begin(BUILTIN_CS)) {
     Serial.println("SD card initialization failed!");
     digitalWrite(ERROR_LED_PIN, HIGH);
-    while (1); // Halt if SD card fails
+    sdCardAvailable = false; // Flag for SD card error
+} else {
+  sdCardAvailable = true;
+  // Open the log file ONCE in setup()
+  logFile = SD.open("flight_log.txt", FILE_WRITE);
+  if (logFile) {
+    logFile.println("Flight Log Start");
+    logFile.flush(); // Use flush() to ensure data is written to the card
   }
+}
 
   // Initialize sensors here
   Wire.begin();
@@ -157,13 +169,6 @@ void setup() {
   // (e.g., MPU6050.begin(), HMC5883L.begin(), etc.)
   Serial.println("Sensors Initialized.");
 
-  // Open the log file
-  logFile = SD.open("flight_log.txt", FILE_WRITE);
-  if (logFile) {
-    logFile.println("Flight Log Start");
-    logFile.close();
-  }
-  
   // Initialize timer for system uptime
   flightStartTime = millis();
   modeStartTime = millis();
@@ -190,7 +195,6 @@ void loop() {
   }
 
   // Use a state machine pattern to run the current mode's logic
-  // The 'switch' statement is non-blocking and allows the loop to run continuously
   switch (currentMode) {
     case MODE_RESET_SENSORS:
       modeResetSensors();
@@ -219,7 +223,8 @@ void loop() {
 // ----------------------------  READ SENSORS  ---------------------------- //
 /* Read and store sensor data in appropriate variables. */
 void readSensors() {
-
+  // Placeholder for sensor reading logic
+  // Example: MPU6050.readSensors(&accelData, &gyroData);
 }
 
 // ----------------------------  READ MODE PINS  ---------------------------- //
@@ -323,8 +328,6 @@ void modeTaxi() {
 /* Flight Plan: Plane should takeoff and climb to a preset altitude. It should then level off and cruise for a preset duration then land and park. */
 void modeTakeoffLevelLand() {
   logEvent("Entered MODE_TAKEOFF_LEVEL_LAND");
-  
-  unsigned long modeDuration = millis() - modeStartTime;
   
   switch (currentFlightState) {
     case STATE_START:
@@ -461,8 +464,6 @@ void takeOff(float targetAltitude) {
       }
     }
   }
-  // Step 3: Level off once the plane reaches target altitude
-  setElevator(LEVEL_ELEVATOR);
 }
 
 // ----------------------------  MAINTAIN LEVEL FLIGHT  ---------------------------- //
@@ -537,6 +538,7 @@ void stopPlane() {
   setAileronLeft(0.0);
   setAileronRight(0.0);
   setRudder(0.0);
+  // enter low-power mode on microcontroller 
 }
 
 // ----------------------------  LEVEL ROLL  ---------------------------- //
@@ -645,21 +647,21 @@ void setElevator(float elevatorAngle) {
 
 // ----------------------------  SET LEFT AILERON  ---------------------------- //
 /* Sets the left aileron angle to control roll. */
-float setAileronLeft() {
+float setAileronLeft(float leftAileronAngle) {
   // currentAileronLeft = max(MIN_AILERON, min(MAX_AILERON, aileronAngle));
   // return ;
 }
 
 // ----------------------------  SET RIGHT AILERON  ---------------------------- //
 /* Sets the right aileron angle to control roll. */
-float setAileronRight() {
+float setAileronRight(float rightAileronAngle) {
   // currentAileronRight = max(MIN_AILERON, min(MAX_AILERON, aileronAngle));
   // return ;
 }
 
 // ----------------------------  SET RUDDER  ---------------------------- //
 /* Sets the rudder angle to control yaw. */
-float setRudder() {
+float setRudder(float rudderAngle) {
   // currentRudder = max(MIN_RUDDER, min(MAX_RUDDER, rudderAngle));
   // return ;
 }
@@ -676,7 +678,20 @@ void logEvent(String message) {
   unsigned long totalMinutes = totalSeconds / 60;
   unsigned long minutes = totalMinutes % 60;
 
-  logFile = SD.open("flight_log.txt", FILE_WRITE);
+  // Print to serial monitor for real-time debugging
+  Serial.print("Time: ");
+  if (minutes < 10) Serial.print("0");
+  Serial.print(minutes);
+  Serial.print(" MIN : ");
+  if (seconds < 10) Serial.print("0");
+  Serial.print(seconds);
+  Serial.print(" SEC : ");
+  if (milliseconds < 100) Serial.print("0");
+  if (milliseconds < 10) Serial.print("0");
+  Serial.print(milliseconds);
+  Serial.print(" MSEC - ");
+  Serial.println(message);
+
   if (logFile) {
     logFile.print("Time: ");    // Prints time as XX MIN: YY SEC: ZZZZ MSEC
     if (minutes < 10) logFile.print("0");
@@ -690,22 +705,8 @@ void logEvent(String message) {
     logFile.print(milliseconds);
     logFile.print(" MSEC - ");
     logFile.println(message);
-    logFile.close();
+    logFile.flush();
   } else {
     Serial.println("Error: Failed to open log file for writing!");
   }
-  
-  // Also print to serial monitor for real-time debugging
-  Serial.print("Time: ");
-  if (minutes < 10) Serial.print("0");
-  Serial.print(minutes);
-  Serial.print(" MIN : ");
-  if (seconds < 10) Serial.print("0");
-  Serial.print(seconds);
-  Serial.print(" SEC : ");
-  if (milliseconds < 100) Serial.print("0");
-  if (milliseconds < 10) Serial.print("0");
-  Serial.print(milliseconds);
-  Serial.print(" MSEC - ");
-  Serial.println(message);
 }
