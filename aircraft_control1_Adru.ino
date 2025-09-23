@@ -1,7 +1,7 @@
 /* ----------------------------  ARDUINO AIRPLANE CONTROL  ---------------------------- */
 /* 
   Nethul Bodiratne 
-  Last updated: 9/22/2025
+  Last updated: 9/23/2025
 */
 /* ----------------------------    ---------------------------- */
 
@@ -51,6 +51,7 @@ File logFile;
 
 // Constants
 const float LANDING_FLARE_ALTITUDE = 0.25; // meters
+const float ROLL_TOLERANCE = 1.0; // degrees
 const float TEST_ALTITUDE = 1.0; // meters
 const unsigned long TEST_LEVEL_DURATION = 10000; // milliseconds
 const unsigned long TEST_HOLDING_PATTERN_DURATION = 20000; // milliseconds
@@ -64,6 +65,9 @@ const float LEVEL_ELEVATOR = 0.0; // elevator angle for level flight
 const float MIN_ELEVATOR = -15.0; // minimum elevator angle in degrees (TE up)
 const float MAX_ELEVATOR = 15.0; // maximum elevator angle in degrees (TE down)
 const float ELEVATOR_STEP = 1.0; // step elevator angle by 1 degree
+const float MIN_AILERON = -15.0; // minimum aileron angle in degrees
+const float MAX_AILERON = 15.0; // maximum aileron angle in degrees
+const float AILERON_STEP - 1.0; // step ailerons angle by 1 degree
 
 // ----------------------------  FUNCTION PROTOTYPES  ---------------------------- //
 // Define all function prototypes to avoid compilation errors
@@ -74,7 +78,7 @@ void levelFlight(float targetAltitude);
 void land();
 void stopPlane();
 bool isPlaneMoving();
-float getCurrentAltitude();
+float getAltitude();
 bool resetSensors();
 void modeResetSensors();
 void modeStopped();
@@ -279,7 +283,7 @@ void modeTakeoffLevelLand() {
   
   // Step 1: Takeoff
   logEvent("Taking off...");
-  while (getCurrentAltitude() < TEST_ALTITUDE) {
+  while (getAltitude() < TEST_ALTITUDE) {
     takeOff(TEST_ALTITUDE);
   }
   logEvent("Reached target altitude. Transitioning to level flight.");
@@ -294,7 +298,7 @@ void modeTakeoffLevelLand() {
  
   // Step 3: Landing
   logEvent("Landing...");
-  while (getCurrentAltitude() > groundAltitude) {
+  while (getAltitude() > groundAltitude) {
     // This loop will continue until the plane is on the ground (altitude saved from sensor reset).
     land();
   }
@@ -320,7 +324,7 @@ void modeHoldingPattern() {
 
   // Step 1: Takeoff
   logEvent("Taking off...");
-  while (getCurrentAltitude() < TEST_ALTITUDE) {
+  while (getAltitude() < TEST_ALTITUDE) {
     takeOff(TEST_ALTITUDE);
   }
   logEvent("Reached target altitude. Transitioning to level flight.");
@@ -335,7 +339,7 @@ void modeHoldingPattern() {
   
   // Step 3: Landing
   logEvent("Landing...");
-  while (getCurrentAltitude() > groundAltitude) {
+  while (getAltitude() > groundAltitude) {
     // This loop will continue until the plane is on the ground (altitude saved from sensor reset).
     land();
   }
@@ -358,7 +362,7 @@ void takeOff(float targetAltitude) {
   // Code for increasing altitude until targetAltitude is reached (using distance sensor or altitude control system)
   // Code to increase speed and get the plane airborne
   // Step 1: Increase throttle until takeoff speed is reached
-  while (getCurrentSpeed() < MIN_TAKEOFF_SPEED) {
+  while (getSpeed() < MIN_TAKEOFF_SPEED) {
     float throttle = getThrottle();
     if (throttle < MAX_THROTLE) {
       throttle += THROTTLE_STEP;
@@ -368,7 +372,7 @@ void takeOff(float targetAltitude) {
     // delay(100); // Small delay between throttle increases. Smooths the acceleration.
   }
   // Step 2: Pitch airplane up to take off
-  while (getCurrentAltitude() < targetAltitude) {
+  while (getAltitude() < targetAltitude) {
     float elevatorAngle = getElevatorAngle();
     if (elevatorAngle < MAX_ELEVATOR) {
       elevatorAngle += ELEVATOR_STEP;
@@ -386,7 +390,7 @@ void takeOff(float targetAltitude) {
 void levelFlight(float targetAltitude) {
   // Maintain altitude for the given time
   // Use the distance sensor to monitor altitude
-  float currentAltitude = getCurrentAltitude();
+  float currentAltitude = getAltitude();
   float altitudeTolerance = 0.1; // Altitude must be +-0.1 of the target
 
   if (currentAltitude < targetAltitude - altitudeTolerance) {
@@ -406,12 +410,28 @@ void levelFlight(float targetAltitude) {
 void land() {
   // Decrease altitude and safely land the plane by reducing throttle and/or control surfaces
   // Use distance sensor to guide the plane to the ground
-  float currentAltitude = getCurrentAltitude();
-  while (currentAltitude > LANDING_FLARE_ALTITUDE) {
+  float currentAltitude = getAltitude();
+  while (currentAltitude > LANDING_FLARE_ALTITUDE) { // Reduce speed until flare altitude is reached
     float throttle = getThrottle();
     if (throttle > MIN_THROTTLE) {
       throttle -= THROTTLE_STEP;
       setThrottle(throttle);
+    }
+    // delay(100);
+  }
+  // Once flare height is reached increase elevator and ailerons to flare
+  // Set ailerons to 0.0 to level the roll of the plane
+  setAileronLeft(0.0);
+  setAileronRight(0.0);
+  while (currentAltitude > groundAltitude) {
+    float leftAileron = getAileronLeftAngle();
+    float rightAileron = getAileronRightAngle();
+    while (leftAileron < MAX_AILERON && rightAileron < MAX_AILERON) {
+      leftAileron += AILERON_STEP;
+      rightAileron += AILERON_STEP;
+      setAileronLeft(leftAileron);
+      setAileronRight(rightAileron);
+      // delay(100);
     }
   }
 }
@@ -423,6 +443,33 @@ void stopPlane() {
   // Set motors to 0. set control surfaces to neutral.
   setThrottle(0.0);
   setElevator(0.0);
+  setAileronLeft(0.0);
+  setAileronRight(0.0);
+  setRudder(0.0);
+}
+
+// ----------------------------  LEVEL ROLL  ---------------------------- //
+/* Pulls the plane out of a roll. */
+void levelRoll() {
+  // First get current aileron angles
+  float leftAileron = getAileronLeftAngle();
+  float rightAileron = getAileronRightAngle();
+  float rollAngle = getRollAngle();
+
+  while (abs(rollAngle) > ROLL_TOLERANCE) { // Correct roll while outside of tolerance
+    float correction = -rollAngle * 0.5; // Proportional contol (must be tuned)
+    // Clamp correction angle to ensure it doesnt exceed maximum aileron angle
+    if (correction > MAX_AILERON) correction = MAX_AILERON;
+    if (correction < MIN_AILERON) correction = MIN_AILERON;
+    // Set ailerons to counteract roll
+    setAileronLeft(-correction);
+    setAileronRight(correction);
+    // delay(100);
+  }
+  // Finally, set ailerons to 0.0 to keep plane level
+  setAileronLeft(0.0);
+  setAileronRight(0.0);
+  // return ;
 }
 
 // ----------------------------  CHECK IF MOVING  ---------------------------- //
@@ -435,13 +482,13 @@ bool isPlaneMoving() {
 
 // ----------------------------  CURRENT ALTITUDE  ---------------------------- //
 /* Get the current altitude. */
-float getCurrentAltitude() {
+float getAltitude() {
   // return altitude; // Returns the value from the distance sensor that is pointed at the ground to get altitude
 }
 
 // ----------------------------  CURRENT SPEED  ---------------------------- //
 /* Get the current speed. */
-float getCurrentSpeed() {
+float getSpeed() {
   // return speed; // Return the speed
 }
 
@@ -451,10 +498,34 @@ float getThrottle() {
   // return currentThrottle; // Return the throttle power
 }
 
+// ----------------------------  CURRENT ROLL ANGLE  ---------------------------- //
+/* Get the current roll angle. */
+float getRollAngle() {
+  // return rollAngle; // Return the roll angle
+}
+
 // ----------------------------  CURRENT ELEVATOR ANGLE  ---------------------------- //
 /* Gets the current elevator angle. */
 float getElevatorAngle() {
   // return currentElevator; // Return the elevator angle
+}
+
+// ----------------------------  CURRENT LEFT AILERON  ---------------------------- //
+/* Gets the current left aileron angle. */
+float getAileronLeftAngle() {
+  // return currentAileronLeft;
+}
+
+// ----------------------------  CURRENT RIGHT AILERON  ---------------------------- //
+/* Gets the current right aileron angle. */
+float getAileronRightAngle() {
+  // return currentAileronRight;
+}
+
+// ----------------------------  CURRENT RUDDER  ---------------------------- //
+/* Gets the current rudder angle. */
+float getRudderAngle() {
+  // return currentRudder;
 }
 
 // ----------------------------  RESET SENSORS  ---------------------------- //
@@ -462,7 +533,7 @@ float getElevatorAngle() {
 bool resetSensors() {
   // Reset logic here
   // E.g., set all sensor data to known starting values
-  // groundAltitude = getCurrentAltitude();
+  // groundAltitude = getAltitude();
   return true;  // Return true if reset successful
 }
 
@@ -476,6 +547,24 @@ void setThrottle(float throttleValue) {
 /* Sets the elevator angle to control aircraft pitch. */
 void setElevator(float elevatorAngle) {
   // return ; // Set the elevator angle
+}
+
+// ----------------------------  SET LEFT AILERON  ---------------------------- //
+/* Sets the left aileron angle to control roll. */
+float setAileronLeft() {
+  // return ;
+}
+
+// ----------------------------  SET RIGHT AILERON  ---------------------------- //
+/* Sets the right aileron angle to control roll. */
+float setAileronRight() {
+  // return ;
+}
+
+// ----------------------------  SET RUDDER  ---------------------------- //
+/* Sets the rudder angle to control yaw. */
+float setRudder() {
+  // return ;
 }
 
 // ----------------------------  LOG TO FILE  ---------------------------- //
