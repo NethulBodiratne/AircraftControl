@@ -26,8 +26,8 @@ Additional modes can be added by expanding the Mode enum and updating the switch
 
 A4. Logging <br>
 Flight logs are saved to flight_log.txt on the SD card and display information on events with timestamps. Examples of the display include: <br>
-Time: 00 MIN: 05 SEC: 024 MSEC - Entered MODE_TAXI
-Time: 00 MIN: 10 SEC: 011 MSEC - Plane has completed taxi and stopped.
+Time: 00 MIN : 05 SEC : 024 MSEC - Entered MODE_TAXI
+Time: 00 MIN : 10 SEC : 011 MSEC - Plane has completed taxi and stopped.
 
 A5. Errors/Unexpected Behaviour <br>
 If an error or an unexpected behaviour occurs, the system will record the time and error details in the flight log and trigger the error LED.
