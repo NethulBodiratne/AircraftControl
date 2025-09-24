@@ -1,7 +1,7 @@
 /* ----------------------------  ARDUINO AIRPLANE CONTROL  ---------------------------- */
 /* 
   Nethul Bodiratne 
-  Last updated: 9/23/2025
+  Last updated: 9/24/2025
 */
 /* ------------------------------------------------------------------------------------ */
 
@@ -25,6 +25,7 @@
 unsigned long flightStartTime = 0;
 unsigned long modeStartTime = 0;
 unsigned long stepStartTime = 0;
+unsigned long lastLoopTime = 0;
 
 // Sensor data variables
 float gyroData[3] = {0.0, 0.0, 0.0};
@@ -40,6 +41,22 @@ float currentElevator = 0.0;
 float currentAileronLeft = 0.0;
 float currentAileronRight = 0.0;
 float currentRudder = 0.0;
+
+// PID for Altitude Control (Elevator)
+float Kp_alt = 1.5;   // Proportional gain for altitude
+float Ki_alt = 0.1;   // Integral gain for altitude
+float Kd_alt = 0.5;   // Derivative gain for altitude
+float error_alt = 0.0;
+float last_error_alt = 0.0;
+float integral_alt = 0.0;
+
+// PID Variables for Roll Control (Ailerons)
+float Kp_roll = 1.0;  // Proportional gain for roll
+float Ki_roll = 0.01; // Integral gain for roll
+float Kd_roll = 0.2;  // Derivative gain for roll
+float error_roll = 0.0;
+float last_error_roll = 0.0;
+float integral_roll = 0.0;
 
 // Mode Enum for Better Readability
 enum Mode {
@@ -120,6 +137,10 @@ void setAileronLeft(float aileronAngle);
 void setAileronRight(float aileronAngle);
 void setRudder(float rudderAngle);
 
+// PID Funstions
+float calcElevatorPID(float targetAltitude);
+float calcAileronPID(float targetRoll);
+
 // Mode functions
 void modeResetSensors();
 void modeStopped();
@@ -184,6 +205,12 @@ void loop() {
   // Always read sensor data at the beginning of the loop
   readSensors();
 
+  // Calculate delta time for PID calculations
+  unsigned long now = millis();
+  float dt = (now - lastLoopTime) / 1000.0; // Convert to seconds
+  if (dt < 0.001) dt = 0.001; // Prevent division by zero
+  lastLoopTime = now;
+  
   // Check the physical mode selection pins
   currentMode = checkModePins();
 
@@ -469,26 +496,10 @@ void takeOff(float targetAltitude) {
 // ----------------------------  MAINTAIN LEVEL FLIGHT  ---------------------------- //
 /* Autopilot for level flight. Takes a altitude target as input and attempts to maintain. */
 void levelFlight(float targetAltitude) {
-  static unsigned long lastCheckTime = 0;
-  if (millis() - lastCheckTime > 100) {
-    lastCheckTime = millis();
-    // Maintain altitude for the given time
-    // Use the distance sensor to monitor altitude
-    float currentAltitude = getAltitude();
-    float altitudeTolerance = 0.5; // Altitude must be +-0.5 of the target
-
-    if (currentAltitude < targetAltitude - altitudeTolerance) {
-      // Too low - adjust control surfaces
-      setElevator(ELEVATOR_STEP);
-    } else if (currentAltitude > targetAltitude + altitudeTolerance) {
-      // Too high - adjust control surfaces
-      setElevator(-ELEVATOR_STEP);
-    } else {
-      // Altitude good
-      setElevator(LEVEL_ELEVATOR);
-    }
-    levelRoll(); // Maintain level roll during flight
-  }
+  // PID control for altitude
+  float elevatorCommand = calcElevatorPID(targetAltitude);
+  setElevator(elevatorCommand);
+  levelRoll(); // Maintain level roll during flight
 }
 
 // ----------------------------  LANDING SEQUENCE  ---------------------------- //
@@ -544,26 +555,81 @@ void stopPlane() {
 // ----------------------------  LEVEL ROLL  ---------------------------- //
 /* Pulls the plane out of a roll. */
 void levelRoll() {
-  static unsigned long lastCheckTime = 0;
-  if (millis() - lastCheckTime > 100) {
-    lastCheckTime = millis();
-    float rollAngle = getRollAngle();
-    
-    if (abs(rollAngle) > ROLL_TOLERANCE) {
-      float correction = -rollAngle * 0.5; // Proportional control (must be tuned)
-      // Clamp correction angle to ensure it doesn't exceed maximum aileron angle
-      if (correction > MAX_AILERON) correction = MAX_AILERON;
-      if (correction < MIN_AILERON) correction = MIN_AILERON;
-      // Set ailerons to counteract roll
-      setAileronLeft(-correction);
-      setAileronRight(correction);
-    } else {
-      // Finally, set ailerons to 0.0 to keep plane level
-      setAileronLeft(0.0);
-      setAileronRight(0.0);
-    }
-  }
+  float aileronCommand = calcAileronPID(0.0); // Target roll is 0 degrees
+  setAileronLeft(-aileronCommand); // Aileron deflection is opposite on each side
+  setAileronRight(aileronCommand);
 }
+
+// ----------------------------  ELEVATOR PID  ---------------------------- //
+/* PID function to calculate the elevator angle. */
+float calcElevatorPID(float targetAltitude) {
+  unsigned long now = millis();
+  float dt = (now - lastLoopTime) / 1000.0; // Delta time in seconds
+  if (dt == 0) return currentElevator; // Avoid division by zero
+
+  // Get current altitude from sensor (placeholder)
+  float currentAltitude = getAltitude();
+  
+  // Proportional term
+  error_alt = targetAltitude - currentAltitude;
+  float p_term = Kp_alt * error_alt;
+
+  // Integral term
+  integral_alt += error_alt * dt;
+  // Anti-windup: clamp the integral term to a reasonable range
+  float integral_limit = 10.0;
+  if (integral_alt > integral_limit) integral_alt = integral_limit;
+  if (integral_alt < -integral_limit) integral_alt = -integral_limit;
+  float i_term = Ki_alt * integral_alt;
+  
+  // Derivative term
+  float derivative_alt = (error_alt - last_error_alt) / dt;
+  float d_term = Kd_alt * derivative_alt;
+  last_error_alt = error_alt;
+
+  // Calculate the PID output and clamp to the allowed range
+  float output = p_term + i_term + d_term;
+  if (output > MAX_ELEVATOR) output = MAX_ELEVATOR;
+  if (output < MIN_ELEVATOR) output = MIN_ELEVATOR;
+
+  return output;
+}
+
+// ----------------------------  AILERON PID  ---------------------------- //
+/* PID function to calculate the aileron angles. */
+float calcAileronPID(float targetRoll) {
+  unsigned long now = millis();
+  float dt = (now - lastLoopTime) / 1000.0; // Delta time in seconds
+  if (dt == 0) return 0.0; // Avoid division by zero
+
+  // Get current roll angle from sensor (placeholder)
+  float currentRoll = getRollAngle();
+  
+  // Proportional term
+  error_roll = targetRoll - currentRoll;
+  float p_term = Kp_roll * error_roll;
+
+  // Integral term
+  integral_roll += error_roll * dt;
+  // Anti-windup: clamp the integral term to a reasonable range
+  float integral_limit = 5.0;
+  if (integral_roll > integral_limit) integral_roll = integral_limit;
+  if (integral_roll < -integral_limit) integral_roll = -integral_limit;
+  float i_term = Ki_roll * integral_roll;
+  
+  // Derivative term
+  float derivative_roll = (error_roll - last_error_roll) / dt;
+  float d_term = Kd_roll * derivative_roll;
+  last_error_roll = error_roll;
+
+  // Calculate the PID output and clamp to the allowed range
+  float output = p_term + i_term + d_term;
+  if (output > MAX_AILERON) output = MAX_AILERON;
+  if (output < MIN_AILERON) output = MIN_AILERON;
+
+  return output;
+}
+
 
 // ----------------------------  CHECK IF MOVING  ---------------------------- //
 /* Checks if the plane is moving. Returns true if moving. */
