@@ -73,7 +73,7 @@ bool sdCardAvailable = false;
 // Constants
 const float LANDING_FLARE_ALTITUDE = 0.25; // meters - The altitude at which the plane initiates the flare maneuver.
 const float ROLL_TOLERANCE = 1.0; // degrees - The acceptable tolerance for the plane's roll angle.
-const float TEST_ALTITUDE = 10.0; // meters - Target altitude for test flights.
+const float TEST_ALTITUDE = 1.0; // meters - Target altitude for test flights.
 const unsigned long TEST_LEVEL_DURATION = 10000; // milliseconds - Duration for maintaining level flight.
 const unsigned long TEST_HOLDING_PATTERN_DURATION = 20000; // milliseconds - Duration for circular holding pattern.
 const unsigned long SENSOR_RESET_STATIONARY_DURATION = 10000; // milliseconds - Duration the plane must be stationary for a sensor reset.
@@ -93,7 +93,7 @@ const float MIN_RUDDER = -15.0; // degrees - rudder full left angle
 const float MAX_RUDDER = 15.0; // degrees - rudder full right angle
 const float RUDDER_STEP = 1.0; // degrees - step rudder angle by 1
 const float FLARE_ELEVATOR_ANGLE = 10.0; // degrees - The elevator angle for the landing flare.
-const float FLARE_AILERON_ANGLE = 5.0; // degrees - Aileron angle to maintain stability during flare.
+const float FLARE_AILERON_ANGLE = 10.0; // degrees - Aileron angle to maintain stability during flare.
 
 // ----------------------------  FUNCTION PROTOTYPES  ---------------------------- //
 // Define all function prototypes to avoid compilation errors
