@@ -1,7 +1,7 @@
 /* ----------------------------  ARDUINO AIRPLANE CONTROL  ---------------------------- */
 /* 
   Nethul Bodiratne 
-  Last updated: 9/24/2025
+  Last updated: 9/25/2025
 */
 /* ------------------------------------------------------------------------------------ */
 
@@ -27,9 +27,15 @@ unsigned long modeStartTime = 0;
 unsigned long stepStartTime = 0;
 unsigned long lastLoopTime = 0;
 
+// Set a fixed loop frequency for real-time control (e.g., 100 Hz)
+const unsigned long CONTROL_LOOP_PERIOD = 10; // milliseconds - Sets the rate at which main loop logic runs
+unsigned long lastControlTime = 0;
+const unsigned long LOG_PERIOD = 500; // milliseconds
+unsigned long lastLogTime = 0;
+
 // Sensor data variables
-float gyroData[3] = {0.0, 0.0, 0.0};
-float accelData[3] = {0.0, 0.0, 0.0};
+float gyroData[3] = {0.0, 0.0, 0.0};    // Example: {roll, pitch, yaw} or {x, y, z}
+float accelData[3] = {0.0, 0.0, 0.0};   // Example: {x, y, z} acceleration
 float distanceData = 0.0;
 float headingData = 0.0;
 float groundAltitude = 0.0;
@@ -129,6 +135,7 @@ float getAileronRightAngle();
 float getRudderAngle();
 float getRollAngle();
 bool resetSensors();
+void checkConstantsOrder();
 
 // Control surface Functions
 void setThrottle(float throttleValue);
@@ -194,6 +201,9 @@ void setup() {
   flightStartTime = millis();
   modeStartTime = millis();
 
+  // Check if mins and maxs of constants are in order
+  checkConstantsOrder();
+
   // Read initial mode from pins
   currentMode = checkModePins();
   lastMode = currentMode;
@@ -202,48 +212,53 @@ void setup() {
 
 // ----------------------------  LOOP  ---------------------------- //
 void loop() {
-  // Always read sensor data at the beginning of the loop
-  readSensors();
-
-  // Calculate delta time for PID calculations
   unsigned long now = millis();
-  float dt = (now - lastLoopTime) / 1000.0; // Convert to seconds
-  if (dt < 0.001) dt = 0.001; // Prevent division by zero
-  lastLoopTime = now;
-  
-  // Check the physical mode selection pins
-  currentMode = checkModePins();
 
-  // Handle mode transitions and reset the mode timer
-  if (currentMode != lastMode) {
-    logEvent("Transitioning from Mode " + String(lastMode) + " to Mode " + String(currentMode));
-    modeStartTime = millis();
-    lastMode = currentMode;
-  }
+  if (now - lastControlTime >= CONTROL_LOOP_PERIOD) {
+    lastControlTime = now;
 
-  // Use a state machine pattern to run the current mode's logic
-  switch (currentMode) {
-    case MODE_RESET_SENSORS:
-      modeResetSensors();
-      break;
-    case MODE_STOPPED:
-      modeStopped();
-      break;
-    case MODE_TAXI:
-      modeTaxi();
-      break;
-    case MODE_TAKEOFF_LEVEL_LAND:
-      modeTakeoffLevelLand();
-      break;
-    case MODE_HOLDING_PATTERN:
-      modeHoldingPattern();
-      break;
-    default:
-      // Unknown mode, default to stopped and log an error
-      stopPlane();
-      digitalWrite(ERROR_LED_PIN, HIGH);
-      logEvent("Error: Unknown mode selected!");
-      break;
+    // Always read sensor data at the beginning of the loop
+    readSensors();
+
+    // Calculate delta time for PID calculations
+    float dt = (now - lastLoopTime) / 1000.0; // Convert to seconds
+    if (dt < 0.001) dt = 0.001; // Prevent division by zero
+    lastLoopTime = now;
+    
+    // Check the physical mode selection pins
+    currentMode = checkModePins();
+
+    // Handle mode transitions and reset the mode timer
+    if (currentMode != lastMode) {
+      logEvent("Transitioning from Mode " + String(lastMode) + " to Mode " + String(currentMode));
+      modeStartTime = millis();
+      lastMode = currentMode;
+    }
+
+    // Use a state machine pattern to run the current mode's logic
+    switch (currentMode) {
+      case MODE_RESET_SENSORS:
+        modeResetSensors();
+        break;
+      case MODE_STOPPED:
+        modeStopped();
+        break;
+      case MODE_TAXI:
+        modeTaxi();
+        break;
+      case MODE_TAKEOFF_LEVEL_LAND:
+        modeTakeoffLevelLand();
+        break;
+      case MODE_HOLDING_PATTERN:
+        modeHoldingPattern();
+        break;
+      default:
+        // Unknown mode, default to stopped and log an error
+        stopPlane();
+        digitalWrite(ERROR_LED_PIN, HIGH);
+        logEvent("Error: Unknown mode selected!");
+        break;
+    }
   }
 }
 
@@ -252,6 +267,12 @@ void loop() {
 void readSensors() {
   // Placeholder for sensor reading logic
   // Example: MPU6050.readSensors(&accelData, &gyroData);
+  // A simple way to manage a mix of sensors that update at different rates
+  // static unsigned long lastAccelTime = 0;
+  // if (millis() - lastAccelTime > 5) {
+  //   // Read accelerometer data here
+  //   lastAccelTime = millis();
+  // }
 }
 
 // ----------------------------  READ MODE PINS  ---------------------------- //
@@ -474,21 +495,16 @@ void modeHoldingPattern() {
 void takeOff(float targetAltitude) {
   // Code for increasing altitude until targetAltitude is reached (using distance sensor or altitude control system)
   // Code to increase speed and get the plane airborne
-  // Use a non-blocking approach with millis()
-  static unsigned long lastCheckTime = 0;
-  if (millis() - lastCheckTime > 100) {
-    lastCheckTime = millis();
-    // Step 1: Increase throttle until takeoff speed is reached
-    if (getSpeed() < MIN_TAKEOFF_SPEED) {
-      if (getThrottle() < MAX_THROTTLE) {
-        setThrottle(getThrottle() + THROTTLE_STEP);
-      }
+  // Step 1: Increase throttle until takeoff speed is reached
+  if (getSpeed() < MIN_TAKEOFF_SPEED) {
+    if (getThrottle() < MAX_THROTTLE) {
+      setThrottle(getThrottle() + THROTTLE_STEP);
     }
-    // Step 2: Pitch airplane up to take off
-    if (getAltitude() < targetAltitude) {
-      if (getElevatorAngle() < MAX_ELEVATOR) {
-        setElevator(getElevatorAngle() + ELEVATOR_STEP);
-      }
+  }
+  // Step 2: Pitch airplane up to take off
+  if (getAltitude() < targetAltitude) {
+    if (getElevatorAngle() < MAX_ELEVATOR) {
+      setElevator(getElevatorAngle() + ELEVATOR_STEP);
     }
   }
 }
@@ -505,26 +521,22 @@ void levelFlight(float targetAltitude) {
 // ----------------------------  LANDING SEQUENCE  ---------------------------- //
 /* Autopilot for landing sequence.  */
 void land() {
-  static unsigned long lastCheckTime = 0;
-  if (millis() - lastCheckTime > 100) {
-    lastCheckTime = millis();
-    float currentAltitude = getAltitude();
-    
-    if (currentAltitude > LANDING_FLARE_ALTITUDE) {
-      // Decrease altitude and safely land the plane by reducing throttle and/or control surfaces
-      float throttle = getThrottle();
-      if (throttle > MIN_THROTTLE) {
-        throttle -= THROTTLE_STEP;
-        setThrottle(throttle);
-      }
-      // setElevator(-ELEVATOR_STEP); // Pitch down slowly
-    } else {
-      // Once flare height is reached, increase elevator for flare and level roll
-      setThrottle(MIN_THROTTLE);
-      setElevator(FLARE_ELEVATOR_ANGLE);
-      setAileronLeft(FLARE_AILERON_ANGLE);
-      setAileronRight(FLARE_AILERON_ANGLE);
+  float currentAltitude = getAltitude();
+  
+  if (currentAltitude > LANDING_FLARE_ALTITUDE) {
+    // Decrease altitude and safely land the plane by reducing throttle and/or control surfaces
+    float throttle = getThrottle();
+    if (throttle > MIN_THROTTLE) {
+      throttle -= THROTTLE_STEP;
+      setThrottle(throttle);
     }
+    // setElevator(-ELEVATOR_STEP); // Pitch down slowly
+  } else {
+    // Once flare height is reached, increase elevator for flare and level roll
+    setThrottle(MIN_THROTTLE);
+    setElevator(FLARE_ELEVATOR_ANGLE);
+    setAileronLeft(FLARE_AILERON_ANGLE);
+    setAileronRight(FLARE_AILERON_ANGLE);
   }
 }
 
@@ -687,16 +699,6 @@ float getRudderAngle() {
   // return currentRudder;
 }
 
-// ----------------------------  RESET SENSORS  ---------------------------- //
-/* Resets sensors to default values. */
-bool resetSensors() {
-  // Reset logic here
-  // E.g., set all sensor data to known starting values
-  // groundAltitude = getAltitude();
-  // Example: MPU6050.calibrate();
-  return true;  // Return true if reset successful
-}
-
 // ----------------------------  SET THROTTLE  ---------------------------- //
 /* Sets the throttle value between 0.0 and 1.0. */
 void setThrottle(float throttleValue) {
@@ -707,14 +709,14 @@ void setThrottle(float throttleValue) {
 // ----------------------------  SET ELEVATOR  ---------------------------- //
 /* Sets the elevator angle to control aircraft pitch. */
 void setElevator(float elevatorAngle) {
-  // currentElevator = max(MIN_ELEVATOR, min(MAX_ELEVATOR, elevatorAngle));
+  // currentThrottle = constrain(throttleValue, MIN_THROTTLE, MAX_THROTTLE);
   // return ; // Set the elevator angle
 }
 
 // ----------------------------  SET LEFT AILERON  ---------------------------- //
 /* Sets the left aileron angle to control roll. */
 float setAileronLeft(float leftAileronAngle) {
-  // currentAileronLeft = max(MIN_AILERON, min(MAX_AILERON, aileronAngle));
+  // currentAileronLeft = constrain(leftAileronAngle, MIN_AILERON, MAX_AILERON);
   // return ;
 }
 
@@ -728,51 +730,97 @@ float setAileronRight(float rightAileronAngle) {
 // ----------------------------  SET RUDDER  ---------------------------- //
 /* Sets the rudder angle to control yaw. */
 float setRudder(float rudderAngle) {
-  // currentRudder = max(MIN_RUDDER, min(MAX_RUDDER, rudderAngle));
+  // currentRudder = constrain(rudderAngle, MIN_RUDDER, MAX_RUDDER);
   // return ;
+}
+
+// ----------------------------  RESET SENSORS  ---------------------------- //
+/* Resets sensors to default values. */
+bool resetSensors() {
+  // Reset logic here
+  // E.g., set all sensor data to known starting values
+  // groundAltitude = getAltitude();
+  // Example: MPU6050.calibrate();
+  return true;  // Return true if reset successful
+}
+
+// ----------------------------  CHECK CONSTANTS MIN & MAX  ---------------------------- //
+/* Ensures that the min andd max values of the constants are correctly ordered (min < max). */
+void checkConstantsOrder() {
+  if (MIN_THROTTLE >= MAX_THROTTLE) {
+    logEvent("ERROR: MIN_THROTTLE is not less than MAX_THROTTLE!");
+    constantsOkay = false;
+  }
+  if (MIN_ELEVATOR >= MAX_ELEVATOR) {
+    logEvent("ERROR: MIN_ELEVATOR is not less than MAX_ELEVATOR!");
+    constantsOkay = false;
+  }
+  if (MIN_AILERON >= MAX_AILERON) {
+    logEvent("RROR: MIN_AILERON is not less than MAX_AILERON!");
+    constantsOkay = false;
+  }
+  if (MIN_RUDDER >= MAX_RUDDER) {
+    logEvent("ERROR: MIN_RUDDER is not less than MAX_RUDDER!");
+    constantsOkay = false;
+  }
+
+  if (!constantsOkay) {
+    digitalWrite(ERROR_LED_PIN, HIGH);
+    while (!constantsOkay) {
+      stopPlane(); // Stop the plane from taking off as long as the constants are unordered
+      delay();
+    }
+  } else {
+    logEvent("All min/max constants are correctly ordered.");
+  }
 }
 
 // ----------------------------  LOG TO FILE  ---------------------------- //
 /* Logs data to file on external memory. */
 void logEvent(String message) {
-  unsigned long elapsedTime = millis() - flightStartTime;
+  unsigned long now = millis();
+  if (now - lastLogTime >= LOG_PERIOD) {
+    lastLogTime = now;
+    unsigned long elapsedTime = millis() - flightStartTime;
 
-  // Calculate time components
-  unsigned long milliseconds = elapsedTime % 1000;
-  unsigned long totalSeconds = elapsedTime / 1000;
-  unsigned long seconds = totalSeconds % 60;
-  unsigned long totalMinutes = totalSeconds / 60;
-  unsigned long minutes = totalMinutes % 60;
+    // Calculate time components
+    unsigned long milliseconds = elapsedTime % 1000;
+    unsigned long totalSeconds = elapsedTime / 1000;
+    unsigned long seconds = totalSeconds % 60;
+    unsigned long totalMinutes = totalSeconds / 60;
+    unsigned long minutes = totalMinutes % 60;
 
-  // Print to serial monitor for real-time debugging
-  Serial.print("Time: ");
-  if (minutes < 10) Serial.print("0");
-  Serial.print(minutes);
-  Serial.print(" MIN : ");
-  if (seconds < 10) Serial.print("0");
-  Serial.print(seconds);
-  Serial.print(" SEC : ");
-  if (milliseconds < 100) Serial.print("0");
-  if (milliseconds < 10) Serial.print("0");
-  Serial.print(milliseconds);
-  Serial.print(" MSEC - ");
-  Serial.println(message);
+    // Print to serial monitor for real-time debugging
+    Serial.print("Time: ");
+    if (minutes < 10) Serial.print("0");
+    Serial.print(minutes);
+    Serial.print(" MIN : ");
+    if (seconds < 10) Serial.print("0");
+    Serial.print(seconds);
+    Serial.print(" SEC : ");
+    if (milliseconds < 100) Serial.print("0");
+    if (milliseconds < 10) Serial.print("0");
+    Serial.print(milliseconds);
+    Serial.print(" MSEC - ");
+    Serial.println(message);
 
-  if (logFile) {
-    logFile.print("Time: ");    // Prints time as XX MIN: YY SEC: ZZZZ MSEC
-    if (minutes < 10) logFile.print("0");
-    logFile.print(minutes);
-    logFile.print(" MIN : ");
-    if (seconds < 10) logFile.print("0");
-    logFile.print(seconds);
-    logFile.print(" SEC : ");
-    if (milliseconds < 100) logFile.print("0");
-    if (milliseconds < 10) logFile.print("0");
-    logFile.print(milliseconds);
-    logFile.print(" MSEC - ");
-    logFile.println(message);
-    logFile.flush();
-  } else {
-    Serial.println("Error: Failed to open log file for writing!");
+    if (logFile && sdCardAvailable) {
+      logFile.print("Time: ");    // Prints time as XX MIN: YY SEC: ZZZZ MSEC
+      if (minutes < 10) logFile.print("0");
+      logFile.print(minutes);
+      logFile.print(" MIN : ");
+      if (seconds < 10) logFile.print("0");
+      logFile.print(seconds);
+      logFile.print(" SEC : ");
+      if (milliseconds < 100) logFile.print("0");
+      if (milliseconds < 10) logFile.print("0");
+      logFile.print(milliseconds);
+      logFile.print(" MSEC - ");
+      logFile.println(message);
+      logFile.flush();
+    } else {
+      Serial.println("Error: Failed to open log file for writing!");
+      digitalWrite(ERROR_LED_PIN, HIGH);
+    }
   }
 }
