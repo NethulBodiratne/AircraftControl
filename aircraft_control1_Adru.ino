@@ -30,7 +30,7 @@ unsigned long lastLoopTime = 0;
 // Set a fixed loop frequency for real-time control (e.g., 100 Hz)
 const unsigned long CONTROL_LOOP_PERIOD = 10; // milliseconds - Sets the rate at which main loop logic runs
 unsigned long lastControlTime = 0;
-const unsigned long LOG_PERIOD = 500; // milliseconds
+const unsigned long LOG_PERIOD = 500; // milliseconds - Rate at which to flush logs to storage
 unsigned long lastLogTime = 0;
 
 // Sensor data variables
@@ -40,6 +40,12 @@ float distanceData = 0.0;
 float headingData = 0.0;
 float groundAltitude = 0.0;
 float rollAngle = 0.0;
+
+// Sensor offsets for error correction during sensor reset
+float altitudeOffset = 0.0;
+float accelOffset[3] = {0.0, 0.0, 0.0};
+float gyroOffset[3] = {0.0, 0.0, 0.0};
+float headingOffset = 0.0;
 
 // Control Surface Variables
 float currentThrottle = 0.0;
@@ -654,7 +660,7 @@ bool isPlaneMoving() {
 // ----------------------------  CURRENT ALTITUDE  ---------------------------- //
 /* Get the current altitude. */
 float getAltitude() {
-  // return altitude; // Returns the value from the distance sensor that is pointed at the ground to get altitude
+  // return altitude - altitudeOffset; // Returns the value from the distance sensor that is pointed at the ground to get altitude
 }
 
 // ----------------------------  CURRENT SPEED  ---------------------------- //
@@ -737,10 +743,39 @@ float setRudder(float rudderAngle) {
 // ----------------------------  RESET SENSORS  ---------------------------- //
 /* Resets sensors to default values. */
 bool resetSensors() {
+  logEvent("Calibrating sensors. Please ensure plane is stationary.");
+
   // Reset logic here
+
+  // Set all offsets to 0
+  float altitudeOffset = 0.0;
+  float accelOffset[3] = {0.0, 0.0, 0.0};
+  float gyroOffset[3] = {0.0, 0.0, 0.0};
+  float headingOffset = 0.0;
+
+  rawDistance = getAltitude();
+  // the rest of the raw measurements go here
   // E.g., set all sensor data to known starting values
-  // groundAltitude = getAltitude();
-  // Example: MPU6050.calibrate();
+  // altitudeOffset = getAltitude();
+  // Alternate option example if sensor supports it: MPU6050.calibrate();  
+  // Read raw sensor data to get the offset values
+  
+  // Store these values as offsets, they will be used as corrections for the get functions
+  altitudeOffset = rawDistance;
+  accelOffset[0] = rawAccel[0];
+  accelOffset[1] = rawAccel[1];
+  accelOffset[2] = rawAccel[2];
+  gyroOffset[0] = rawGyro[0];
+  gyroOffset[1] = rawGyro[1];
+  gyroOffset[2] = rawGyro[2];
+  headingOffset = rawHeading;
+  
+  logEvent("Calibration complete. Stored offsets:");
+  logEvent("Altitude Offset: " + String(altitudeOffset) + "m");
+  logEvent("Accel Offsets: {" + String(accelOffset[0]) + ", " + String(accelOffset[1]) + ", " + String(accelOffset[2]) + "}");
+  logEvent("Gyro Offsets: {" + String(gyroOffset[0]) + ", " + String(gyroOffset[1]) + ", " + String(gyroOffset[2]) + "}");
+  logEvent("Heading Offset: " + String(headingOffset));
+
   return true;  // Return true if reset successful
 }
 
@@ -768,7 +803,7 @@ void checkConstantsOrder() {
     digitalWrite(ERROR_LED_PIN, HIGH);
     while (!constantsOkay) {
       stopPlane(); // Stop the plane from taking off as long as the constants are unordered
-      delay();
+      delay(100);
     }
   } else {
     logEvent("All min/max constants are correctly ordered.");
