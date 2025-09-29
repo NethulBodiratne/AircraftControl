@@ -1,7 +1,7 @@
 /* ----------------------------  ARDUINO AIRPLANE CONTROL  ---------------------------- */
 /* 
   Nethul Bodiratne 
-  Last updated: 9/25/2025
+  Last updated: 9/29/2025
 */
 /* ------------------------------------------------------------------------------------ */
 
@@ -31,7 +31,7 @@ unsigned long lastLoopTime = 0;
 const unsigned long CONTROL_LOOP_PERIOD = 10; // milliseconds - Sets the rate at which main loop logic runs
 unsigned long lastControlTime = 0;
 const unsigned long LOG_PERIOD = 500; // milliseconds - Rate at which to flush logs to storage
-unsigned long lastLogTime = 0;
+unsigned long lastLogFlushTime = 0;
 
 // Sensor data variables
 float gyroData[3] = {0.0, 0.0, 0.0};    // Example: {roll, pitch, yaw} or {x, y, z}
@@ -46,6 +46,9 @@ float altitudeOffset = 0.0;
 float accelOffset[3] = {0.0, 0.0, 0.0};
 float gyroOffset[3] = {0.0, 0.0, 0.0};
 float headingOffset = 0.0;
+
+// Checking sensors
+bool constantsOkay = true;
 
 // Control Surface Variables
 float currentThrottle = 0.0;
@@ -142,6 +145,7 @@ float getRudderAngle();
 float getRollAngle();
 bool resetSensors();
 void checkConstantsOrder();
+void checkSensorConnections();
 
 // Control surface Functions
 void setThrottle(float throttleValue);
@@ -182,20 +186,25 @@ void setup() {
   pinMode(ERROR_LED_PIN, OUTPUT);
   //pinMode(STATUS_GOOD_PIN, OUTPUT);
 
+  // Set ERROR LED to default start state (low)
+  digitalWrite(ERROR_LED_PIN, LOW);
+
   // Initialize SD card
   if (!SD.begin(BUILTIN_CS)) {
-    Serial.println("SD card initialization failed!");
+    Serial.println("SD card initialization failed.");
     digitalWrite(ERROR_LED_PIN, HIGH);
     sdCardAvailable = false; // Flag for SD card error
-} else {
-  sdCardAvailable = true;
-  // Open the log file ONCE in setup()
-  logFile = SD.open("flight_log.txt", FILE_WRITE);
-  if (logFile) {
-    logFile.println("Flight Log Start");
-    logFile.flush(); // Use flush() to ensure data is written to the card
+  } else {
+    sdCardAvailable = true;
+    // Open the log file ONCE in setup()
+    logFile = SD.open("flight_log.txt", FILE_WRITE);
+    if (logFile) {
+      logFile.println("Flight Log Start - Initailized");
+      logFile.flush(); // Use flush() to ensure data is written to the card
+    } else {
+      Serial.println("ERROR: Could not open flight_log.txt");
+    }
   }
-}
 
   // Initialize sensors here
   Wire.begin();
@@ -206,14 +215,17 @@ void setup() {
   // Initialize timer for system uptime
   flightStartTime = millis();
   modeStartTime = millis();
+  lastLoopTime = millis();
 
-  // Check if mins and maxs of constants are in order
+  // Initail checks and reads
   checkConstantsOrder();
+  checkSensorConnections();
+  readSensors();
 
   // Read initial mode from pins
   currentMode = checkModePins();
   lastMode = currentMode;
-  logEvent("Initial mode set to " + String(currentMode));
+  logEvent("System Setup completed. Initial mode set to " + String(currentMode));
 }
 
 // ----------------------------  LOOP  ---------------------------- //
@@ -223,13 +235,14 @@ void loop() {
   if (now - lastControlTime >= CONTROL_LOOP_PERIOD) {
     lastControlTime = now;
 
-    // Always read sensor data at the beginning of the loop
-    readSensors();
-
     // Calculate delta time for PID calculations
     float dt = (now - lastLoopTime) / 1000.0; // Convert to seconds
     if (dt < 0.001) dt = 0.001; // Prevent division by zero
+    lastControlTime = now;
     lastLoopTime = now;
+
+    // Always read sensor data at the beginning of the loop
+    readSensors();
     
     // Check the physical mode selection pins
     currentMode = checkModePins();
@@ -237,8 +250,9 @@ void loop() {
     // Handle mode transitions and reset the mode timer
     if (currentMode != lastMode) {
       logEvent("Transitioning from Mode " + String(lastMode) + " to Mode " + String(currentMode));
-      modeStartTime = millis();
       lastMode = currentMode;
+      modeStartTime = millis();
+      currentFlightState = STATE_START;
     }
 
     // Use a state machine pattern to run the current mode's logic
@@ -262,8 +276,15 @@ void loop() {
         // Unknown mode, default to stopped and log an error
         stopPlane();
         digitalWrite(ERROR_LED_PIN, HIGH);
-        logEvent("Error: Unknown mode selected!");
+        logEvent("ERROR: Unknown mode selected (" + String(currentMode)) + "). Defaulting to STOPPED Mode.");
         break;
+    }
+  }
+
+  if (sdCardAvailable && now - lastLogFlushTime >= LOG_PERIOD) {
+    lastLogFlushTime = now;
+    if (logFile) {
+      logFile.flush();  // Flush logs to file now
     }
   }
 }
@@ -278,6 +299,8 @@ void readSensors() {
   // if (millis() - lastAccelTime > 5) {
   //   // Read accelerometer data here
   //   lastAccelTime = millis();
+  //   // Example:
+  //   mpu.getMotion6(&accelData[0], &accelData[1], &accelData[2], &gyroData[0], &gyroData[1], &gyroData[2]);
   // }
 }
 
@@ -289,7 +312,7 @@ Mode checkModePins() {
   int pinB = digitalRead(MODE_1);
   int pinC = digitalRead(MODE_2);
   int pinD = digitalRead(MODE_3);
-  int pinE = digitalRead(MODE_4)
+  int pinE = digitalRead(MODE_4);
   
   // Combine pin states into a binary number
   // Using INPUT_PULLUP, LOW means the switch is closed.
@@ -324,16 +347,14 @@ void modeResetSensors() {
   // Check if the plane is moving or stationary
   if (isPlaneMoving()) {
     digitalWrite(ERROR_LED_PIN, HIGH); // Turn on the error LED
-    logEvent("Error: Plane is not stationary as expected!");
-  } else {
-    digitalWrite(ERROR_LED_PIN, LOW); // Turn off the error LED
+    logEvent("ERROR: Plane is not stationary as expected.");
   }
   
   // Check if stationary for x seconds
   if (millis() - modeStartTime > SENSOR_RESET_STATIONARY_DURATION) {  // x = 10 seconds for sensor reset, can be changed later
     if (!resetSensors()) {
       digitalWrite(ERROR_LED_PIN, HIGH); // Turn on the error LED if reset fails
-      logEvent("Error: Sensor reset failed!");
+      logEvent("ERROR: Sensor reset failed.");
     } else {
       logEvent("Sensors reset successfully.");
     }
@@ -350,9 +371,7 @@ void modeStopped() {
   // Check if the plane is moving or stationary
   if (isPlaneMoving()) {
     digitalWrite(ERROR_LED_PIN, HIGH); // Turn on the error LED
-    logEvent("Error: Plane is not stationary as expected!");
-  } else {
-    digitalWrite(ERROR_LED_PIN, LOW); // Turn off the error LED
+    logEvent("ERROR: Plane is not stationary as expected.");
   }
 }
 
@@ -370,9 +389,8 @@ void modeTaxi() {
     stopPlane();
     if (isPlaneMoving()) {
       digitalWrite(ERROR_LED_PIN, HIGH); // Turn on the error LED
-      logEvent("Error: Plane is not stationary as expected!");
+      logEvent("ERROR: Plane is not stationary as expected.");
     } else {
-      digitalWrite(ERROR_LED_PIN, LOW); // Turn off the error LED
       logEvent("Plane has completed taxi and stopped.");
     }
   }
@@ -428,9 +446,8 @@ void modeTakeoffLevelLand() {
       stopPlane();
       if (isPlaneMoving()) {
         digitalWrite(ERROR_LED_PIN, HIGH); // Turn on the error LED
-        logEvent("Error: Plane is not stationary as expected!");
+        logEvent("ERROR: Plane is not stationary as expected.");
       } else {
-        digitalWrite(ERROR_LED_PIN, LOW); // Turn off the error LED
         logEvent("Plane has landed and stopped.");
       }
       break;
@@ -487,9 +504,8 @@ void modeHoldingPattern() {
       stopPlane();
       if (isPlaneMoving()) {
         digitalWrite(ERROR_LED_PIN, HIGH); // Turn on the error LED
-        logEvent("Error: Plane is not stationary as expected!");
+        logEvent("ERROR: Plane is not stationary as expected.");
       } else {
-        digitalWrite(ERROR_LED_PIN, LOW); // Turn off the error LED
         logEvent("Plane has landed and stopped.");
       }
       break;
@@ -721,21 +737,21 @@ void setElevator(float elevatorAngle) {
 
 // ----------------------------  SET LEFT AILERON  ---------------------------- //
 /* Sets the left aileron angle to control roll. */
-float setAileronLeft(float leftAileronAngle) {
+void setAileronLeft(float leftAileronAngle) {
   // currentAileronLeft = constrain(leftAileronAngle, MIN_AILERON, MAX_AILERON);
   // return ;
 }
 
 // ----------------------------  SET RIGHT AILERON  ---------------------------- //
 /* Sets the right aileron angle to control roll. */
-float setAileronRight(float rightAileronAngle) {
+void setAileronRight(float rightAileronAngle) {
   // currentAileronRight = max(MIN_AILERON, min(MAX_AILERON, aileronAngle));
   // return ;
 }
 
 // ----------------------------  SET RUDDER  ---------------------------- //
 /* Sets the rudder angle to control yaw. */
-float setRudder(float rudderAngle) {
+void setRudder(float rudderAngle) {
   // currentRudder = constrain(rudderAngle, MIN_RUDDER, MAX_RUDDER);
   // return ;
 }
@@ -748,12 +764,12 @@ bool resetSensors() {
   // Reset logic here
 
   // Set all offsets to 0
-  float altitudeOffset = 0.0;
-  float accelOffset[3] = {0.0, 0.0, 0.0};
-  float gyroOffset[3] = {0.0, 0.0, 0.0};
-  float headingOffset = 0.0;
+  altitudeOffset = 0.0;
+  accelOffset[3] = {0.0, 0.0, 0.0};
+  gyroOffset[3] = {0.0, 0.0, 0.0};
+  headingOffset = 0.0;
 
-  rawDistance = getAltitude();
+  float rawDistance = getAltitude();
   // the rest of the raw measurements go here
   // E.g., set all sensor data to known starting values
   // altitudeOffset = getAltitude();
@@ -783,19 +799,19 @@ bool resetSensors() {
 /* Ensures that the min andd max values of the constants are correctly ordered (min < max). */
 void checkConstantsOrder() {
   if (MIN_THROTTLE >= MAX_THROTTLE) {
-    logEvent("ERROR: MIN_THROTTLE is not less than MAX_THROTTLE!");
+    logEvent("ERROR: MIN_THROTTLE is not less than MAX_THROTTLE.");
     constantsOkay = false;
   }
   if (MIN_ELEVATOR >= MAX_ELEVATOR) {
-    logEvent("ERROR: MIN_ELEVATOR is not less than MAX_ELEVATOR!");
+    logEvent("ERROR: MIN_ELEVATOR is not less than MAX_ELEVATOR.");
     constantsOkay = false;
   }
   if (MIN_AILERON >= MAX_AILERON) {
-    logEvent("RROR: MIN_AILERON is not less than MAX_AILERON!");
+    logEvent("ERROR: MIN_AILERON is not less than MAX_AILERON.");
     constantsOkay = false;
   }
   if (MIN_RUDDER >= MAX_RUDDER) {
-    logEvent("ERROR: MIN_RUDDER is not less than MAX_RUDDER!");
+    logEvent("ERROR: MIN_RUDDER is not less than MAX_RUDDER.");
     constantsOkay = false;
   }
 
@@ -810,52 +826,68 @@ void checkConstantsOrder() {
   }
 }
 
+// ----------------------------  CHECK SENSOR CONNECTIONS  ---------------------------- //
+/* Checks if there are sensor connection issues at startup. */
+void checkSensorConnections() {
+  // if (!mpu.testConnection()) {
+  //   logEvent("ERROR: MPU6050 sensor failure. Possible connection issue.");
+  //   digitalWrite(ERROR_LED_PIN, HIGH); // Turn on error LED
+  // }
+  // if (!compass.testConnection()) {
+  //   logEvent("ERROR: HMC5883L sensor failure. Possible connection issue.");
+  //   digitalWrite(ERROR_LED_PIN, HIGH);
+  // }
+  // if (distanceData < 0.1) {  // Threshold to detect if the distance sensor is malfunctioning
+  //   logEvent("ERROR: Distance sensor reading invalid. Possible connection issue.");
+  //   digitalWrite(ERROR_LED_PIN, HIGH);
+  // }
+}
+
 // ----------------------------  LOG TO FILE  ---------------------------- //
 /* Logs data to file on external memory. */
 void logEvent(String message) {
+  unsigned long elapsedTime = millis() - flightStartTime;
   unsigned long now = millis();
-  if (now - lastLogTime >= LOG_PERIOD) {
-    lastLogTime = now;
-    unsigned long elapsedTime = millis() - flightStartTime;
+  
+  unsigned long elapsedTime = millis() - flightStartTime;
 
-    // Calculate time components
-    unsigned long milliseconds = elapsedTime % 1000;
-    unsigned long totalSeconds = elapsedTime / 1000;
-    unsigned long seconds = totalSeconds % 60;
-    unsigned long totalMinutes = totalSeconds / 60;
-    unsigned long minutes = totalMinutes % 60;
+  // Calculate time components
+  unsigned long milliseconds = elapsedTime % 1000;
+  unsigned long totalSeconds = elapsedTime / 1000;
+  unsigned long seconds = totalSeconds % 60;
+  unsigned long totalMinutes = totalSeconds / 60;
+  unsigned long minutes = totalMinutes % 60;
 
-    // Print to serial monitor for real-time debugging
-    Serial.print("Time: ");
-    if (minutes < 10) Serial.print("0");
-    Serial.print(minutes);
-    Serial.print(" MIN : ");
-    if (seconds < 10) Serial.print("0");
-    Serial.print(seconds);
-    Serial.print(" SEC : ");
-    if (milliseconds < 100) Serial.print("0");
-    if (milliseconds < 10) Serial.print("0");
-    Serial.print(milliseconds);
-    Serial.print(" MSEC - ");
-    Serial.println(message);
+  // Print to serial monitor for real-time debugging
+  Serial.print("Time: ");
+  if (minutes < 10) Serial.print("0");
+  Serial.print(minutes);
+  Serial.print(" MIN : ");
+  if (seconds < 10) Serial.print("0");
+  Serial.print(seconds);
+  Serial.print(" SEC : ");
+  if (milliseconds < 100) Serial.print("0");
+  if (milliseconds < 10) Serial.print("0");
+  Serial.print(milliseconds);
+  Serial.print(" MSEC - ");
+  Serial.println(message);
 
-    if (logFile && sdCardAvailable) {
-      logFile.print("Time: ");    // Prints time as XX MIN: YY SEC: ZZZZ MSEC
-      if (minutes < 10) logFile.print("0");
-      logFile.print(minutes);
-      logFile.print(" MIN : ");
-      if (seconds < 10) logFile.print("0");
-      logFile.print(seconds);
-      logFile.print(" SEC : ");
-      if (milliseconds < 100) logFile.print("0");
-      if (milliseconds < 10) logFile.print("0");
-      logFile.print(milliseconds);
-      logFile.print(" MSEC - ");
-      logFile.println(message);
-      logFile.flush();
-    } else {
-      Serial.println("Error: Failed to open log file for writing!");
-      digitalWrite(ERROR_LED_PIN, HIGH);
-    }
+  if (logFile && sdCardAvailable) {
+    logFile.print("Time: ");    // Prints time as XX MIN: YY SEC: ZZZZ MSEC
+    if (minutes < 10) logFile.print("0");
+    logFile.print(minutes);
+    logFile.print(" MIN : ");
+    if (seconds < 10) logFile.print("0");
+    logFile.print(seconds);
+    logFile.print(" SEC : ");
+    if (milliseconds < 100) logFile.print("0");
+    if (milliseconds < 10) logFile.print("0");
+    logFile.print(milliseconds);
+    logFile.print(" MSEC - ");
+    logFile.println(message);
+    logFile.flush();
+  } else {
+    Serial.println("ERROR: Failed to open log file for writing.");
+    digitalWrite(ERROR_LED_PIN, HIGH);
   }
 }
