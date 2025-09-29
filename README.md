@@ -34,6 +34,11 @@ A5. Errors/Unexpected Behaviour <br>
 If an error or an unexpected behaviour occurs, the system will record the time and error details in the flight log and trigger the error LED.
 
 
-
+A6. To Be Completed <br>
+- Implement full takeOff(), land(), and holdingPattern() logic.
+- Add PID control for altitude and orientation.
+- Integrate GPS for more complex flight patterns.
+- Improve getCurrentAltitude() accuracy.
+- Implement telemetry over serial or RF.
 
 
