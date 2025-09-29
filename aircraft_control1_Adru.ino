@@ -847,9 +847,6 @@ void checkSensorConnections() {
 /* Logs data to file on external memory. */
 void logEvent(String message) {
   unsigned long elapsedTime = millis() - flightStartTime;
-  unsigned long now = millis();
-  
-  unsigned long elapsedTime = millis() - flightStartTime;
 
   // Calculate time components
   unsigned long milliseconds = elapsedTime % 1000;
@@ -858,35 +855,24 @@ void logEvent(String message) {
   unsigned long totalMinutes = totalSeconds / 60;
   unsigned long minutes = totalMinutes % 60;
 
-  // Print to serial monitor for real-time debugging
-  Serial.print("Time: ");
-  if (minutes < 10) Serial.print("0");
-  Serial.print(minutes);
-  Serial.print(" MIN : ");
-  if (seconds < 10) Serial.print("0");
-  Serial.print(seconds);
-  Serial.print(" SEC : ");
-  if (milliseconds < 100) Serial.print("0");
-  if (milliseconds < 10) Serial.print("0");
-  Serial.print(milliseconds);
-  Serial.print(" MSEC - ");
+  // Format time string
+  String timeStr = "";
+  if (minutes < 10) timeStr += "0"; timeStr += String(minutes); timeStr += " MIN : ";
+  if (seconds < 10) timeStr += "0"; timeStr += String(seconds); timeStr += " SEC : ";
+  if (milliseconds < 100) timeStr += "0";
+  if (milliseconds < 10) timeStr += "0"; timeStr += String(milliseconds); timeStr += " MSEC - ";
+
+  // Print to serial monitor for real-time debugging (Immediate)
+  Serial.print(timeStr);
   Serial.println(message);
 
-  if (logFile && sdCardAvailable) {
-    logFile.print("Time: ");    // Prints time as XX MIN: YY SEC: ZZZZ MSEC
-    if (minutes < 10) logFile.print("0");
-    logFile.print(minutes);
-    logFile.print(" MIN : ");
-    if (seconds < 10) logFile.print("0");
-    logFile.print(seconds);
-    logFile.print(" SEC : ");
-    if (milliseconds < 100) logFile.print("0");
-    if (milliseconds < 10) logFile.print("0");
-    logFile.print(milliseconds);
-    logFile.print(" MSEC - ");
+  // Write to log file (will be flushed periodically)
+  if (sdCardAvailable && logFile) {
+    logFile.print(timeStr);
     logFile.println(message);
-    logFile.flush();
-  } else {
+    // Do NOT call logFile.flush() here, as it's slow. It's called periodically in loop().
+  } else if (sdCardAvailable) {
+    // logFile is closed, but SD is available. Should not happen unless corrupted.
     Serial.println("ERROR: Failed to open log file for writing.");
     digitalWrite(ERROR_LED_PIN, HIGH);
   }
