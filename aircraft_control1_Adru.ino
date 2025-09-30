@@ -1,7 +1,7 @@
 /* ----------------------------  ARDUINO AIRPLANE CONTROL  ---------------------------- */
 /* 
   Nethul Bodiratne 
-  Last updated: 9/29/2025
+  Last updated: 9/30/2025
 */
 /* ------------------------------------------------------------------------------------ */
 
@@ -98,9 +98,10 @@ enum FlightState {
 
 FlightState currentFlightState = STATE_START;
 
-// Log file creation
+// Log file creation and log buffer
 File logFile;
 bool sdCardAvailable = false;
+char logBuffer[128];
 
 // Constants
 const float LANDING_FLARE_ALTITUDE = 0.25; // meters - The altitude at which the plane initiates the flare maneuver.
@@ -225,7 +226,8 @@ void setup() {
   // Read initial mode from pins
   currentMode = checkModePins();
   lastMode = currentMode;
-  logEvent("System Setup completed. Initial mode set to " + String(currentMode));
+  snprintf(logBuffer, sizeof(logBuffer), "System Setup completed. Initial mode set to %d", currentMode);
+  logEvent(logBuffer);
 }
 
 // ----------------------------  LOOP  ---------------------------- //
@@ -233,13 +235,12 @@ void loop() {
   unsigned long now = millis();
 
   if (now - lastControlTime >= CONTROL_LOOP_PERIOD) {
-    lastControlTime = now;
-
     // Calculate delta time for PID calculations
     float dt = (now - lastLoopTime) / 1000.0; // Convert to seconds
     if (dt < 0.001) dt = 0.001; // Prevent division by zero
-    lastControlTime = now;
     lastLoopTime = now;
+    lastControlTime = now;
+
 
     // Always read sensor data at the beginning of the loop
     readSensors();
@@ -249,7 +250,8 @@ void loop() {
 
     // Handle mode transitions and reset the mode timer
     if (currentMode != lastMode) {
-      logEvent("Transitioning from Mode " + String(lastMode) + " to Mode " + String(currentMode));
+      snprintf(logBuffer, sizeof(logBuffer), "Transitioning from Mode %d to Mode %d", lastMode, currentMode);
+      logEvent(logBuffer);
       lastMode = currentMode;
       modeStartTime = millis();
       currentFlightState = STATE_START;
@@ -276,7 +278,8 @@ void loop() {
         // Unknown mode, default to stopped and log an error
         stopPlane();
         digitalWrite(ERROR_LED_PIN, HIGH);
-        logEvent("ERROR: Unknown mode selected (" + String(currentMode)) + "). Defaulting to STOPPED Mode.");
+        snprintf(logBuffer, sizeof(logBuffer), "ERROR: Unknown mode selected (%d). Defaulting to STOPPED Mode.", currentMode);
+        logEvent(logBuffer);
         break;
     }
   }
@@ -296,7 +299,7 @@ void readSensors() {
   // Example: MPU6050.readSensors(&accelData, &gyroData);
   // A simple way to manage a mix of sensors that update at different rates
   // static unsigned long lastAccelTime = 0;
-  // if (millis() - lastAccelTime > 5) {
+  // if (millis() - lastAccelTime > 50) {
   //   // Read accelerometer data here
   //   lastAccelTime = millis();
   //   // Example:
@@ -787,10 +790,14 @@ bool resetSensors() {
   headingOffset = rawHeading;
   
   logEvent("Calibration complete. Stored offsets:");
-  logEvent("Altitude Offset: " + String(altitudeOffset) + "m");
-  logEvent("Accel Offsets: {" + String(accelOffset[0]) + ", " + String(accelOffset[1]) + ", " + String(accelOffset[2]) + "}");
-  logEvent("Gyro Offsets: {" + String(gyroOffset[0]) + ", " + String(gyroOffset[1]) + ", " + String(gyroOffset[2]) + "}");
-  logEvent("Heading Offset: " + String(headingOffset));
+  snprintf(logBuffer, sizeof(logBuffer), "Altitude Offset: %.2f m", altitudeOffset);
+  logEvent(logBuffer);
+  snprintf(logBuffer, sizeof(logBuffer), "Accel Offsets: {%.2f, %.2f, %.2f}", accelOffset[0], accelOffset[1], accelOffset[2]);
+  logEvent(logBuffer);
+  snprintf(logBuffer, sizeof(logBuffer), "Gyro Offsets: {%.2f, %.2f, %.2f}", gyroOffset[0], gyroOffset[1], gyroOffset[2]);
+  logEvent(logBuffer);
+  snprintf(logBuffer, sizeof(logBuffer), "Heading Offset: %.2f", headingOffset);
+  logEvent(logBuffer);
 
   return true;  // Return true if reset successful
 }
@@ -845,7 +852,7 @@ void checkSensorConnections() {
 
 // ----------------------------  LOG TO FILE  ---------------------------- //
 /* Logs data to file on external memory. */
-void logEvent(String message) {
+void logEvent(const char* message) {
   unsigned long elapsedTime = millis() - flightStartTime;
 
   // Calculate time components
@@ -856,12 +863,9 @@ void logEvent(String message) {
   unsigned long minutes = totalMinutes % 60;
 
   // Format time string
-  String timeStr = "";
-  if (minutes < 10) timeStr += "0"; timeStr += String(minutes); timeStr += " MIN : ";
-  if (seconds < 10) timeStr += "0"; timeStr += String(seconds); timeStr += " SEC : ";
-  if (milliseconds < 100) timeStr += "0";
-  if (milliseconds < 10) timeStr += "0"; timeStr += String(milliseconds); timeStr += " MSEC - ";
-
+  char timeStr[40];
+  snprintf(timeStr, sizeof(timeStr), "%02lu MIN : %02lu SEC : %03lu MSEC - ", minutes, seconds, milliseconds);
+  
   // Print to serial monitor for real-time debugging (Immediate)
   Serial.print(timeStr);
   Serial.println(message);
