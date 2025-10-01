@@ -1,7 +1,7 @@
 /* ----------------------------  ARDUINO AIRPLANE CONTROL  ---------------------------- */
 /* 
   Nethul Bodiratne 
-  Last updated: 9/30/2025
+  Last updated: 10/1/2025
 */
 /* ------------------------------------------------------------------------------------ */
 
@@ -26,6 +26,7 @@ unsigned long flightStartTime = 0;
 unsigned long modeStartTime = 0;
 unsigned long stepStartTime = 0;
 unsigned long lastLoopTime = 0;
+unsigned long lastControlTime = 0;
 
 // Set a fixed loop frequency for real-time control (e.g., 100 Hz)
 const unsigned long CONTROL_LOOP_PERIOD = 10; // milliseconds - Sets the rate at which main loop logic runs
@@ -73,13 +74,17 @@ float error_roll = 0.0;
 float last_error_roll = 0.0;
 float integral_roll = 0.0;
 
+// Global fault state tracker
+bool systemInFault = false;
+
 // Mode Enum for Better Readability
 enum Mode {
   MODE_RESET_SENSORS = 1,
   MODE_STOPPED,
   MODE_TAXI,
   MODE_TAKEOFF_LEVEL_LAND,
-  MODE_HOLDING_PATTERN
+  MODE_HOLDING_PATTERN,
+  MODE_FAULT  // Mode for critical, non-recoverable errors which should ground the plane
   // Add more flight modes here
 };
 
@@ -176,7 +181,7 @@ void land();
 // ----------------------------  SETUP  ---------------------------- //
 void setup() {
   // Initialize serial communication
-  Serial.begin(9600);
+  Serial.begin(9600); // Increasing the baud rate to 115200 may allow faster non-blocking logging
 
   // Setup pins
   pinMode(MODE_0, INPUT);
@@ -217,6 +222,7 @@ void setup() {
   flightStartTime = millis();
   modeStartTime = millis();
   lastLoopTime = millis();
+  lastControlTime = millis();
 
   // Initail checks and reads
   checkConstantsOrder();
@@ -226,8 +232,14 @@ void setup() {
   // Read initial mode from pins
   currentMode = checkModePins();
   lastMode = currentMode;
-  snprintf(logBuffer, sizeof(logBuffer), "System Setup completed. Initial mode set to %d", currentMode);
-  logEvent(logBuffer);
+  
+  if (systemInFault) {
+    currentMode = MODE_FAULT;
+    logEvent("CRITICAL FAULT during setup. System locked to MODE_FAULT.");
+  } else {
+    snprintf(logBuffer, sizeof(logBuffer), "System Setup completed. Initial mode set to %d", currentMode);
+    logEvent(logBuffer);
+  }
 }
 
 // ----------------------------  LOOP  ---------------------------- //
@@ -238,9 +250,7 @@ void loop() {
     // Calculate delta time for PID calculations
     float dt = (now - lastLoopTime) / 1000.0; // Convert to seconds
     if (dt < 0.001) dt = 0.001; // Prevent division by zero
-    lastLoopTime = now;
     lastControlTime = now;
-
 
     // Always read sensor data at the beginning of the loop
     readSensors();
@@ -249,7 +259,9 @@ void loop() {
     currentMode = checkModePins();
 
     // Handle mode transitions and reset the mode timer
-    if (currentMode != lastMode) {
+    if (systemInFault) {
+      currentMode = MODE_FAULT; // Move to fault mode if a fault occurs
+    } else if (currentMode != lastMode) {
       snprintf(logBuffer, sizeof(logBuffer), "Transitioning from Mode %d to Mode %d", lastMode, currentMode);
       logEvent(logBuffer);
       lastMode = currentMode;
@@ -274,14 +286,20 @@ void loop() {
       case MODE_HOLDING_PATTERN:
         modeHoldingPattern();
         break;
+      case MODE_FAULT:
+        modeFault();
+        break;
       default:
-        // Unknown mode, default to stopped and log an error
-        stopPlane();
-        digitalWrite(ERROR_LED_PIN, HIGH);
-        snprintf(logBuffer, sizeof(logBuffer), "ERROR: Unknown mode selected (%d). Defaulting to STOPPED Mode.", currentMode);
+        // Unknown mode, default to fault and log an error
+        systemInFault = true;
+        currentMode = MODE_FAULT;
+        snprintf(logBuffer, sizeof(logBuffer), "ERROR: Unknown mode selected (%d). Defaulting to FAULT Mode.", currentMode);
         logEvent(logBuffer);
         break;
     }
+
+    // Update lastLoopTime after other logic to keep it accurate
+    lastLoopTime = now;
   }
 
   if (sdCardAvailable && now - lastLogFlushTime >= LOG_PERIOD) {
@@ -340,6 +358,15 @@ Mode checkModePins() {
   }
 }
 
+// ----------------------------  FAULT MODE  ---------------------------- //
+/* Mode for landling critical fault states for non-recoverable errors. */
+void modeFault() {
+  stopPlane();
+
+  // Keep the error LED on
+  digitalWrite(ERROR_LED_PIN, HIGH);
+}
+
 // ----------------------------  MODE 0 (RESET SENSORS)  ---------------------------- //
 /* Flight Plan: Stops the plane then if stationary for duration reset sensors. */
 void modeResetSensors() {
@@ -381,7 +408,7 @@ void modeStopped() {
 // ----------------------------  MODE 2 (TAXI)  ---------------------------- //
 /* Flight Plan: Taxi the plane for a certain duration. */
 void modeTaxi() {
-  logEvent("Entered MODE_STOPPED");
+  logEvent("Entered MODE_TAXI");
 
   // Add taxi logic based on distance/time
   if (millis() - modeStartTime < TAXI_DURATION) { // Taxi for 5 seconds (as an example)
@@ -586,24 +613,25 @@ void stopPlane() {
   setAileronLeft(0.0);
   setAileronRight(0.0);
   setRudder(0.0);
+  // Reset PID integrals
+  integral_alt = 0.0;
+  integral_roll = 0.0;
+  last_error_alt = 0.0;
+  last_error_roll = 0.0;
   // enter low-power mode on microcontroller 
 }
 
 // ----------------------------  LEVEL ROLL  ---------------------------- //
 /* Pulls the plane out of a roll. */
 void levelRoll() {
-  float aileronCommand = calcAileronPID(0.0); // Target roll is 0 degrees
+  float aileronCommand = calcAileronPID(0.0, dt); // Target roll is 0 degrees
   setAileronLeft(-aileronCommand); // Aileron deflection is opposite on each side
   setAileronRight(aileronCommand);
 }
 
 // ----------------------------  ELEVATOR PID  ---------------------------- //
 /* PID function to calculate the elevator angle. */
-float calcElevatorPID(float targetAltitude) {
-  unsigned long now = millis();
-  float dt = (now - lastLoopTime) / 1000.0; // Delta time in seconds
-  if (dt == 0) return currentElevator; // Avoid division by zero
-
+float calcElevatorPID(float targetAltitude, float dt) {
   // Get current altitude from sensor (placeholder)
   float currentAltitude = getAltitude();
   
@@ -634,11 +662,7 @@ float calcElevatorPID(float targetAltitude) {
 
 // ----------------------------  AILERON PID  ---------------------------- //
 /* PID function to calculate the aileron angles. */
-float calcAileronPID(float targetRoll) {
-  unsigned long now = millis();
-  float dt = (now - lastLoopTime) / 1000.0; // Delta time in seconds
-  if (dt == 0) return 0.0; // Avoid division by zero
-
+float calcAileronPID(float targetRoll, float dt) {
   // Get current roll angle from sensor (placeholder)
   float currentRoll = getRollAngle();
   
@@ -727,7 +751,7 @@ float getRudderAngle() {
 // ----------------------------  SET THROTTLE  ---------------------------- //
 /* Sets the throttle value between 0.0 and 1.0. */
 void setThrottle(float throttleValue) {
-  // currentThrottle = max(MIN_THROTTLE, min(MAX_THROTTLE, throttleValue));
+  // currentThrottle = constrain(MIN_THROTTLE, min(MAX_THROTTLE, throttleValue));
   // return ; // Set the throttle power
 }
 
@@ -748,7 +772,7 @@ void setAileronLeft(float leftAileronAngle) {
 // ----------------------------  SET RIGHT AILERON  ---------------------------- //
 /* Sets the right aileron angle to control roll. */
 void setAileronRight(float rightAileronAngle) {
-  // currentAileronRight = max(MIN_AILERON, min(MAX_AILERON, aileronAngle));
+  // currentAileronRight = constrain(rightAileronAngle, MIN_AILERON, MAX_AILERON);
   // return ;
 }
 
@@ -768,8 +792,10 @@ bool resetSensors() {
 
   // Set all offsets to 0
   altitudeOffset = 0.0;
-  accelOffset[3] = {0.0, 0.0, 0.0};
-  gyroOffset[3] = {0.0, 0.0, 0.0};
+  for (int i = 0; i < 3; i++) {
+    accelOffset[i] = 0.0;
+    gyroOffset[i] = 0.0;
+  }
   headingOffset = 0.0;
 
   float rawDistance = getAltitude();
@@ -824,10 +850,8 @@ void checkConstantsOrder() {
 
   if (!constantsOkay) {
     digitalWrite(ERROR_LED_PIN, HIGH);
-    while (!constantsOkay) {
-      stopPlane(); // Stop the plane from taking off as long as the constants are unordered
-      delay(100);
-    }
+    logEvent("FATAL ERROR: Invalid min/max constants detected.");
+    systemInFault = true;
   } else {
     logEvent("All min/max constants are correctly ordered.");
   }
@@ -839,14 +863,17 @@ void checkSensorConnections() {
   // if (!mpu.testConnection()) {
   //   logEvent("ERROR: MPU6050 sensor failure. Possible connection issue.");
   //   digitalWrite(ERROR_LED_PIN, HIGH); // Turn on error LED
+  //   systemInFault = true;
   // }
   // if (!compass.testConnection()) {
   //   logEvent("ERROR: HMC5883L sensor failure. Possible connection issue.");
   //   digitalWrite(ERROR_LED_PIN, HIGH);
+  //   systemInFault = true;
   // }
   // if (distanceData < 0.1) {  // Threshold to detect if the distance sensor is malfunctioning
   //   logEvent("ERROR: Distance sensor reading invalid. Possible connection issue.");
   //   digitalWrite(ERROR_LED_PIN, HIGH);
+  //   systemInFault = true;
   // }
 }
 
