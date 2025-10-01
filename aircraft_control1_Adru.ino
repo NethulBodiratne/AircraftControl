@@ -31,7 +31,7 @@ unsigned long lastControlTime = 0;
 // Set a fixed loop frequency for real-time control (e.g., 100 Hz)
 const unsigned long CONTROL_LOOP_PERIOD = 10; // milliseconds - Sets the rate at which main loop logic runs
 unsigned long lastControlTime = 0;
-const unsigned long LOG_PERIOD = 500; // milliseconds - Rate at which to flush logs to storage
+const unsigned long LOG_PERIOD = 1000; // milliseconds - Rate at which to flush logs to storage
 unsigned long lastLogFlushTime = 0;
 
 // Sensor data variables
@@ -161,8 +161,8 @@ void setAileronRight(float aileronAngle);
 void setRudder(float rudderAngle);
 
 // PID Funstions
-float calcElevatorPID(float targetAltitude);
-float calcAileronPID(float targetRoll);
+float calcElevatorPID(float targetAltitude, float dt);
+float calcAileronPID(float targetRoll, float dt);
 
 // Mode functions
 void modeResetSensors();
@@ -172,11 +172,11 @@ void modeTakeoffLevelLand();
 void modeHoldingPattern();
 
 // Flight Sequence functions
-void takeOff(float targetAltitude);
-void levelFlight(float targetAltitude);
-void levelRoll();
-void holdingPattern();
-void land();
+void takeOff(float targetAltitude, float dt);
+void levelFlight(float targetAltitude, float dt);
+void levelRoll(float dt);
+void holdingPattern(float dt);
+void land(float dt);
 
 // ----------------------------  SETUP  ---------------------------- //
 void setup() {
@@ -370,8 +370,6 @@ void modeFault() {
 // ----------------------------  MODE 0 (RESET SENSORS)  ---------------------------- //
 /* Flight Plan: Stops the plane then if stationary for duration reset sensors. */
 void modeResetSensors() {
-  logEvent("Entered MODE_RESET_SENSORS");
-
   stopPlane();
   
   // Check if the plane is moving or stationary
@@ -394,8 +392,6 @@ void modeResetSensors() {
 // ----------------------------  MODE 1 (STOPPED)  ---------------------------- //
 /* Flight Plan: Stops the plane then checks if staionary. */
 void modeStopped() {
-  logEvent("Entered MODE_STOPPED");
-
   stopPlane();
   
   // Check if the plane is moving or stationary
@@ -408,8 +404,6 @@ void modeStopped() {
 // ----------------------------  MODE 2 (TAXI)  ---------------------------- //
 /* Flight Plan: Taxi the plane for a certain duration. */
 void modeTaxi() {
-  logEvent("Entered MODE_TAXI");
-
   // Add taxi logic based on distance/time
   if (millis() - modeStartTime < TAXI_DURATION) { // Taxi for 5 seconds (as an example)
     // Code to control the plane's motors for taxiing
@@ -429,8 +423,6 @@ void modeTaxi() {
 // ----------------------------  MODE 3 (TAKEOFF, LEVEL, LAND)  ---------------------------- //
 /* Flight Plan: Plane should takeoff and climb to a preset altitude. It should then level off and cruise for a preset duration then land and park. */
 void modeTakeoffLevelLand() {
-  logEvent("Entered MODE_TAKEOFF_LEVEL_LAND");
-  
   switch (currentFlightState) {
     case STATE_START:
       logEvent("Starting takeoff sequence.");
@@ -487,8 +479,6 @@ void modeTakeoffLevelLand() {
 // ----------------------------  MODE 4 (CIRCULAR HOLDING PATTERN)  ---------------------------- //
 /* Flight Plan: Take off then maintain altitude while flying in a constant turn. */
 void modeHoldingPattern() {
-  logEvent("Entered MODE_HOLDING_PATTERN");
-
   switch (currentFlightState) {
     case STATE_START:
       logEvent("Starting takeoff sequence for holding pattern.");
@@ -574,6 +564,7 @@ void levelFlight(float targetAltitude) {
 /* Autopilot for landing sequence.  */
 void land() {
   float currentAltitude = getAltitude();
+  levelRoll();
   
   if (currentAltitude > LANDING_FLARE_ALTITUDE) {
     // Decrease altitude and safely land the plane by reducing throttle and/or control surfaces
