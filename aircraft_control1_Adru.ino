@@ -123,6 +123,7 @@ const unsigned long TAXI_DURATION = 5000; // milliseconds - Duration for taxiing
 const float LANDING_FLARE_ALTITUDE = 0.25f; // meters - The altitude at which the plane initiates the flare maneuver.
 const float ROLL_TOLERANCE = 1.0f; // degrees - The acceptable tolerance for the plane's roll angle.
 const float TEST_ALTITUDE = 1.0f; // meters - Target altitude for test flights.
+const float TEST_BANK_ANGLE = 15.0f;  // degrees - Target bank angle for the circular holding pattern.
 const float MIN_TAKEOFF_SPEED = 15.0f; // m/s - The minimum speed required for takeoff.
 const float MIN_THROTTLE = 0.0f; // minimum throttle power (0.0 to 1.0)
 const float MAX_THROTTLE = 1.0f; // maximum throttle power (0.0 to 1.0)
@@ -139,6 +140,7 @@ const float MAX_RUDDER = 15.0f; // degrees - rudder full right angle
 const float RUDDER_STEP = 1.0f; // degrees - step rudder angle by 1
 const float FLARE_ELEVATOR_ANGLE = 10.0f; // degrees - The elevator angle for the landing flare.
 const float FLARE_AILERON_ANGLE = 10.0f; // degrees - Aileron angle to maintain stability during flare.
+const float MIN_ACCEL_SQUARED_THRESHOLD = 0.01f;  // m/s^2 - Sensor Stationary Threshold (for isPlaneMoving optimization). Check against the squared value to avoid sqrt() and pow() in isPlaneMoving().
 
 // ----------------------------  FUNCTION PROTOTYPES  ---------------------------- //
 // Define all function prototypes to avoid compilation errors
@@ -175,12 +177,13 @@ float calcAileronPID(float targetRoll, float dt);
 void modeResetSensors();
 void modeStopped();
 void modeTaxi();
-void modeTakeoffLevelLand(dt);
-void modeHoldingPattern(dt);
+void modeTakeoffLevelLand(float dt);
+void modeHoldingPattern(float dt);
+void modeFault();
 
 // Flight Sequence functions
 void takeOff(float targetAltitude, float dt);
-void levelFlight(float targetAltitude, float dt);
+void cruiseFlight(float targetAltitude, float targetRoll, float dt);
 void levelRoll(float dt);
 void holdingPattern(float dt);
 void land(float dt);
@@ -458,7 +461,7 @@ void modeTakeoffLevelLand(float dt) {
     // Step 2: Level Flight
     case STATE_LEVEL_FLIGHT:
       if (millis() - stepStartTime < TEST_LEVEL_DURATION) {
-        levelFlight(TEST_ALTITUDE, dt);
+        cruiseFlight(TEST_ALTITUDE, 0.0f, dt);
       } else {
         logEvent("Level flight duration complete. Transitioning to landing.");
         currentFlightState = STATE_LANDING;
@@ -514,7 +517,7 @@ void modeHoldingPattern(float dt) {
     // Step 2: Hold Constant Turn
     case STATE_HOLDING_PATTERN:
       if (millis() - stepStartTime < TEST_HOLDING_PATTERN_DURATION) {
-        holdingPattern(dt);
+        holdingPattern(dt); // Might be able to be changed to cruiseFlight() but cruiseFlight() cant use the rudder yet.
       } else {
         logEvent("Holding pattern complete. Transitioning to landing.");
         currentFlightState = STATE_LANDING;
@@ -554,7 +557,7 @@ void takeOff(float targetAltitude, float dt) {
   // Step 1: Increase throttle until takeoff speed is reached
   if (getSpeed() < MIN_TAKEOFF_SPEED) {
     // Ramp up throttle gradually
-		setThrottle(constrain(getThrottle() + (THROTTLE_STEP * dt), MIN_THROTTLE, MAX_THROTTLE));
+		setThrottle(constrain(getThrottle() + (THROTTLE_STEP), MIN_THROTTLE, MAX_THROTTLE));
 	} else {
 		// Maintain a fixed high throttle for climb-out
 		setThrottle(MAX_THROTTLE * 0.9f);
@@ -571,30 +574,45 @@ void takeOff(float targetAltitude, float dt) {
 
 // ----------------------------  MAINTAIN LEVEL FLIGHT  ---------------------------- //
 /* Autopilot for level flight. Takes a altitude target as input and attempts to maintain. */
-void levelFlight(float targetAltitude, float dt) {
+void cruiseFlight(float targetAltitude, float targetRoll, float dt) {
   // PID control for altitude
   float elevatorCommand = calcElevatorPID(targetAltitude, dt);
   setElevator(elevatorCommand);
 	// Set cruise throttle (or use speed PID if implemented)
 	setThrottle(MAX_THROTTLE * 0.6f); // Could use a CRUISE_THROTTLE var instead or PID
-  levelRoll(dt); // Maintain level roll during flight
+  
+  // PID control for roll
+  float aileronCommand = calcAileronPID(targetRoll, dt); 
+  // Set ailerons differentially based on the unified command
+  setAileronLeft(-aileronCommand);
+  setAileronRight(aileronCommand);
+  
+  // Set rudder based on roll angle. The angle should be higher based on the targetRoll but start at a certain threshold (eg. targetRoll = 5 gives rudder = 0 and targetRoll = 6 gives rudder = 1 and so on).
+  // if (targetRoll <= 5) {
+  //   setRudder(0.0f);
+  // } else {
+  //   setRudder();
+  // }
+  // Reset rudder angle at the end
 }
 
 // ----------------------------  LANDING SEQUENCE  ---------------------------- //
 /* Autopilot for landing sequence.  */
 void land(float dt) {
   float currentAltitude = getAltitude();
+   
   levelRoll(dt);
   
   // Decrease altitude and safely land the plane by reducing throttle and/or control surfaces
   if (currentAltitude > LANDING_FLARE_ALTITUDE) {
     // Gently reduce throttle for descent
-		setThrottle(constrain(getThrottle() - (THROTTLE_STEP * dt), MIN_THROTTLE, MAX_THROTTLE * 0.3f));
+		setThrottle(constrain(getThrottle() - (THROTTLE_STEP), MIN_THROTTLE, MAX_THROTTLE * 0.3f));
 		
 		// Use elevator to maintain a shallow glide slope (pitch slightly down or neutral)
 		setElevator(LEVEL_ELEVATOR - ELEVATOR_STEP); 
   } else {
     // Once flare height is reached, increase elevator for flare and level roll
+    logEvent("Initiating Landing Flare.");
     setThrottle(MIN_THROTTLE);
     setElevator(FLARE_ELEVATOR_ANGLE);
     setAileronLeft(FLARE_AILERON_ANGLE);
@@ -607,16 +625,8 @@ void land(float dt) {
 void holdingPattern(float dt) {
   // Example logic:
   // Maintain altitude
-  levelFlight(TEST_ALTITUDE, dt);
-  // Apply a constant roll for a circular turn
-	// Positive roll angle (e.g., 15 degrees) will initiate a turn
-	float targetRoll = 15.0f; 
-	float aileronCommand = calcAileronPID(targetRoll, dt); 
-	
-	// Set ailerons to maintain the target roll
-	setAileronLeft(aileronCommand);
-	setAileronRight(-aileronCommand); // Opposite deflection
-	
+  cruiseFlight(TEST_ALTITUDE, TEST_BANK_ANGLE, dt);
+  
 	// Apply a constant rudder input to assist the turn (optional, depends on airframe)
 	setRudder(MAX_RUDDER * 0.3f);
 }
@@ -707,8 +717,7 @@ float calcAileronPID(float targetRoll, float dt) {
 /* Checks if the plane is moving. Returns true if moving. */
 bool isPlaneMoving() {
   // A simple example; this could be expanded based on gyro/accel data
-  float speed = sqrt(pow(accelData[0], 2) + pow(accelData[1], 2) + pow(accelData[2], 2));
-  return speed > 0.1f; // If movement detected (threshold)
+  return (accelData[0]*accelData[0] + accelData[1]*accelData[1] + accelData[2]*accelData[2]) > (0.1f * 0.1f); // (Accel[x]^2 + Accel[y]^2 + Accel[z]^2) > (threshold^2)
 }
 
 // ----------------------------  CURRENT ALTITUDE  ---------------------------- //
