@@ -1,7 +1,7 @@
 /* ----------------------------  ARDUINO AIRPLANE CONTROL  ---------------------------- */
 /* 
   Nethul Bodiratne 
-  Last updated: 10/1/2025
+  Last updated: 10/2/2025
 */
 /* ------------------------------------------------------------------------------------ */
 
@@ -9,6 +9,12 @@
 #include <SPI.h>
 #include <SD.h>
 // Add other necessary libraries for the sensors (e.g., MPU6050 for gyro/accelerometer, HMC5883L for magnetometer, etc.)
+
+// --- Helper Functions/Macros (Arduino environment) ---
+// Define the constrain function since it's used in the logic. Might not be needed for Arduino implementation.
+#ifndef constrain
+#define constrain(amt, low, high) ((amt) < (low) ? (low) : ((amt) > (high) ? (high) : (amt)))
+#endif
 
 // Pin Definitions for Mode Selection
 #define MODE_0 2
@@ -26,7 +32,6 @@ unsigned long flightStartTime = 0;
 unsigned long modeStartTime = 0;
 unsigned long stepStartTime = 0;
 unsigned long lastLoopTime = 0;
-unsigned long lastControlTime = 0;
 
 // Set a fixed loop frequency for real-time control (e.g., 100 Hz)
 const unsigned long CONTROL_LOOP_PERIOD = 10; // milliseconds - Sets the rate at which main loop logic runs
@@ -35,44 +40,46 @@ const unsigned long LOG_PERIOD = 1000; // milliseconds - Rate at which to flush 
 unsigned long lastLogFlushTime = 0;
 
 // Sensor data variables
-float gyroData[3] = {0.0, 0.0, 0.0};    // Example: {roll, pitch, yaw} or {x, y, z}
-float accelData[3] = {0.0, 0.0, 0.0};   // Example: {x, y, z} acceleration
-float distanceData = 0.0;
-float headingData = 0.0;
-float groundAltitude = 0.0;
-float rollAngle = 0.0;
+float gyroData[3] = {0.0f, 0.0f, 0.0f};    // Example: {roll, pitch, yaw} or {x, y, z}
+float accelData[3] = {0.0f, 0.0f, 0.0f};   // Example: {x, y, z} acceleration
+float distanceData = 0.0f;
+float headingData = 0.0f;
+float groundAltitude = 0.0f; 		// Altitude relative to takeoff point (calibrated)
+float rollAngle = 0.0f; 				// Calculated roll angle
+float flightSpeed = 0.0f; 			// Air speed or ground speed
 
 // Sensor offsets for error correction during sensor reset
-float altitudeOffset = 0.0;
-float accelOffset[3] = {0.0, 0.0, 0.0};
-float gyroOffset[3] = {0.0, 0.0, 0.0};
-float headingOffset = 0.0;
+float altitudeOffset = 0.0f;
+float accelOffset[3] = {0.0f, 0.0f, 0.0f};
+float gyroOffset[3] = {0.0f, 0.0f, 0.0f};
+float headingOffset = 0.0f;
 
 // Checking sensors
 bool constantsOkay = true;
 
 // Control Surface Variables
-float currentThrottle = 0.0;
-float currentElevator = 0.0;
-float currentAileronLeft = 0.0;
-float currentAileronRight = 0.0;
-float currentRudder = 0.0;
+float currentThrottle = 0.0f;
+float currentElevator = 0.0f;
+float currentAileronLeft = 0.0f;
+float currentAileronRight = 0.0f;
+float currentRudder = 0.0f;
 
+// PID variables (might have to reset these between every mode or flight step change)
 // PID for Altitude Control (Elevator)
-float Kp_alt = 1.5;   // Proportional gain for altitude
-float Ki_alt = 0.1;   // Integral gain for altitude
-float Kd_alt = 0.5;   // Derivative gain for altitude
-float error_alt = 0.0;
-float last_error_alt = 0.0;
-float integral_alt = 0.0;
+float Kp_alt = 1.5f;   // Proportional gain for altitude
+float Ki_alt = 0.1f;   // Integral gain for altitude
+float Kd_alt = 0.5f;   // Derivative gain for altitude
+float error_alt = 0.0f;
+float last_error_alt = 0.0f;
+float integral_alt = 0.0f;
 
 // PID Variables for Roll Control (Ailerons)
-float Kp_roll = 1.0;  // Proportional gain for roll
-float Ki_roll = 0.01; // Integral gain for roll
-float Kd_roll = 0.2;  // Derivative gain for roll
-float error_roll = 0.0;
-float last_error_roll = 0.0;
-float integral_roll = 0.0;
+float Kp_roll = 1.0f;  // Proportional gain for roll
+float Ki_roll = 0.01f; // Integral gain for roll
+float Kd_roll = 0.2f;  // Derivative gain for roll
+float error_roll = 0.0f;
+float last_error_roll = 0.0f;
+float integral_roll = 0.0f;
 
 // Global fault state tracker
 bool systemInFault = false;
@@ -136,7 +143,7 @@ const float FLARE_AILERON_ANGLE = 10.0; // degrees - Aileron angle to maintain s
 // ----------------------------  FUNCTION PROTOTYPES  ---------------------------- //
 // Define all function prototypes to avoid compilation errors
 // General Utility Functions
-void logEvent(String message);
+void logEvent(const char* message);
 Mode checkModePins();
 void readSensors();
 void stopPlane();
@@ -168,8 +175,8 @@ float calcAileronPID(float targetRoll, float dt);
 void modeResetSensors();
 void modeStopped();
 void modeTaxi();
-void modeTakeoffLevelLand();
-void modeHoldingPattern();
+void modeTakeoffLevelLand(dt);
+void modeHoldingPattern(dt);
 
 // Flight Sequence functions
 void takeOff(float targetAltitude, float dt);
@@ -184,7 +191,7 @@ void setup() {
   Serial.begin(9600); // Increasing the baud rate to 115200 may allow faster non-blocking logging
 
   // Setup pins
-  pinMode(MODE_0, INPUT);
+  pinMode(MODE_0, INPUT); // Using INPUT_PULLUP might be more stable
   pinMode(MODE_1, INPUT);
   pinMode(MODE_2, INPUT);
   pinMode(MODE_3, INPUT);
@@ -248,8 +255,8 @@ void loop() {
 
   if (now - lastControlTime >= CONTROL_LOOP_PERIOD) {
     // Calculate delta time for PID calculations
-    float dt = (now - lastLoopTime) / 1000.0; // Convert to seconds
-    if (dt < 0.001) dt = 0.001; // Prevent division by zero
+    float dt = (now - lastLoopTime) / 1000.0f; // Convert to seconds
+    if (dt < 0.001f) dt = 0.001f; // Prevent division by zero
     lastControlTime = now;
 
     // Always read sensor data at the beginning of the loop
@@ -281,10 +288,10 @@ void loop() {
         modeTaxi();
         break;
       case MODE_TAKEOFF_LEVEL_LAND:
-        modeTakeoffLevelLand();
+        modeTakeoffLevelLand(dt);
         break;
       case MODE_HOLDING_PATTERN:
-        modeHoldingPattern();
+        modeHoldingPattern(dt);
         break;
       case MODE_FAULT:
         modeFault();
@@ -329,32 +336,34 @@ void readSensors() {
 /* Checks the mode selection pins using the returns corresponding enum. */
 Mode checkModePins() {
   // Read the state of each pin
-  int pinA = digitalRead(MODE_0);
-  int pinB = digitalRead(MODE_1);
-  int pinC = digitalRead(MODE_2);
-  int pinD = digitalRead(MODE_3);
-  int pinE = digitalRead(MODE_4);
+  int pin0 = digitalRead(MODE_0);
+	int pin1 = digitalRead(MODE_1);
+	int pin2 = digitalRead(MODE_2);
+	int pin3 = digitalRead(MODE_3);
+	int pin4 = digitalRead(MODE_4);
   
   // Combine pin states into a binary number
   // Using INPUT_PULLUP, LOW means the switch is closed.
-  int modeValue = (!pinD << 3) | (!pinC << 2) | (!pinB << 1) | !pinA;
+	int modeValue = (!pin4 << 4) | (!pin3 << 3) | (!pin2 << 2) | (!pin1 << 1) | !pin0;
   
   // Map binary value to the Mode enum
   // Example: 0001 -> MODE_RESET_SENSORS
   // This is a simple example; you can define the mapping as you wish
   switch (modeValue) {
-    case 1:
-      return MODE_RESET_SENSORS;
-    case 2:
-      return MODE_STOPPED;
-    case 3:
-      return MODE_TAXI;
-    case 4:
-      return MODE_TAKEOFF_LEVEL_LAND;
-    case 5:
-      return MODE_HOLDING_PATTERN;
-    default:
-      return MODE_STOPPED; // Default to a safe stopped mode
+    case 1: // 00001
+			return MODE_RESET_SENSORS;
+		case 2: // 00010
+			return MODE_STOPPED;
+		case 3: // 00011
+			return MODE_TAXI;
+		case 4: // 00100
+			return MODE_TAKEOFF_LEVEL_LAND;
+		case 5: // 00101
+			return MODE_HOLDING_PATTERN;
+		// case 31: // 11111 - All pins pulled LOW might be a special debug/override mode
+		// 	return MODE_FAULT;
+		default:
+			return MODE_FAULT; // Default to a safe stopped or fault mode
   }
 }
 
@@ -376,6 +385,8 @@ void modeResetSensors() {
   if (isPlaneMoving()) {
     digitalWrite(ERROR_LED_PIN, HIGH); // Turn on the error LED
     logEvent("ERROR: Plane is not stationary as expected.");
+    modeStartTime = millis(); // Reset timer until stationary
+		return;
   }
   
   // Check if stationary for x seconds
@@ -383,8 +394,11 @@ void modeResetSensors() {
     if (!resetSensors()) {
       digitalWrite(ERROR_LED_PIN, HIGH); // Turn on the error LED if reset fails
       logEvent("ERROR: Sensor reset failed.");
+      systemInFault = true;
     } else {
       logEvent("Sensors reset successfully.");
+      // Transition to MODE_STOPPED automatically
+      currentMode = MODE_STOPPED;
     }
   }
 }
@@ -407,8 +421,8 @@ void modeTaxi() {
   // Add taxi logic based on distance/time
   if (millis() - modeStartTime < TAXI_DURATION) { // Taxi for 5 seconds (as an example)
     // Code to control the plane's motors for taxiing
-    setThrottle(0.2); // Example throttle for taxiing, can be changed to setThrottle(TAXI_THROTTLE)
-    setRudder(0.0);
+    setThrottle(0.2f); // Example throttle for taxiing, can be changed to setThrottle(TAXI_THROTTLE)
+    setRudder(0.0f);
   } else { // Stop and transition to parked state
     stopPlane();
     if (isPlaneMoving()) {
@@ -422,7 +436,7 @@ void modeTaxi() {
 
 // ----------------------------  MODE 3 (TAKEOFF, LEVEL, LAND)  ---------------------------- //
 /* Flight Plan: Plane should takeoff and climb to a preset altitude. It should then level off and cruise for a preset duration then land and park. */
-void modeTakeoffLevelLand() {
+void modeTakeoffLevelLand(float dt) {
   switch (currentFlightState) {
     case STATE_START:
       logEvent("Starting takeoff sequence.");
@@ -433,7 +447,7 @@ void modeTakeoffLevelLand() {
     // Step 1: Takeoff
     case STATE_TAKEOFF:
       if (getAltitude() < TEST_ALTITUDE) {
-        takeOff(TEST_ALTITUDE);
+        takeOff(TEST_ALTITUDE, dt);
       } else {
         logEvent("Reached target altitude. Transitioning to level flight.");
         currentFlightState = STATE_LEVEL_FLIGHT;
@@ -444,7 +458,7 @@ void modeTakeoffLevelLand() {
     // Step 2: Level Flight
     case STATE_LEVEL_FLIGHT:
       if (millis() - stepStartTime < TEST_LEVEL_DURATION) {
-        levelFlight(TEST_ALTITUDE);
+        levelFlight(TEST_ALTITUDE, dt);
       } else {
         logEvent("Level flight duration complete. Transitioning to landing.");
         currentFlightState = STATE_LANDING;
@@ -455,7 +469,7 @@ void modeTakeoffLevelLand() {
     // Step 3: Landing
     case STATE_LANDING:
       if (getAltitude() > groundAltitude) {
-        land();
+        land(dt);
       } else {
         logEvent("Landed successfully. Transitioning to parked state.");
         currentFlightState = STATE_PARKED;
@@ -478,7 +492,7 @@ void modeTakeoffLevelLand() {
 
 // ----------------------------  MODE 4 (CIRCULAR HOLDING PATTERN)  ---------------------------- //
 /* Flight Plan: Take off then maintain altitude while flying in a constant turn. */
-void modeHoldingPattern() {
+void modeHoldingPattern(float dt) {
   switch (currentFlightState) {
     case STATE_START:
       logEvent("Starting takeoff sequence for holding pattern.");
@@ -489,7 +503,7 @@ void modeHoldingPattern() {
     // Step 1: Take off
     case STATE_TAKEOFF:
       if (getAltitude() < TEST_ALTITUDE) {
-        takeOff(TEST_ALTITUDE);
+        takeOff(TEST_ALTITUDE, dt);
       } else {
         logEvent("Reached target altitude. Transitioning to holding pattern.");
         currentFlightState = STATE_HOLDING_PATTERN;
@@ -500,7 +514,7 @@ void modeHoldingPattern() {
     // Step 2: Hold Constant Turn
     case STATE_HOLDING_PATTERN:
       if (millis() - stepStartTime < TEST_HOLDING_PATTERN_DURATION) {
-        holdingPattern();
+        holdingPattern(dt);
       } else {
         logEvent("Holding pattern complete. Transitioning to landing.");
         currentFlightState = STATE_LANDING;
@@ -511,7 +525,7 @@ void modeHoldingPattern() {
     // Step 3: Landing
     case STATE_LANDING:
       if (getAltitude() > groundAltitude) {
-        land();
+        land(dt);
       } else {
         logEvent("Landed successfully. Transitioning to parked state.");
         currentFlightState = STATE_PARKED;
@@ -534,46 +548,51 @@ void modeHoldingPattern() {
 
 // ----------------------------  TAKEOFF SEQUENCE  ---------------------------- //
 /* Autopilot for takeoff stage. */
-void takeOff(float targetAltitude) {
+void takeOff(float targetAltitude, float dt) {
   // Code for increasing altitude until targetAltitude is reached (using distance sensor or altitude control system)
   // Code to increase speed and get the plane airborne
   // Step 1: Increase throttle until takeoff speed is reached
   if (getSpeed() < MIN_TAKEOFF_SPEED) {
-    if (getThrottle() < MAX_THROTTLE) {
-      setThrottle(getThrottle() + THROTTLE_STEP);
-    }
-  }
-  // Step 2: Pitch airplane up to take off
+    // Ramp up throttle gradually
+		setThrottle(constrain(getThrottle() + (THROTTLE_STEP * dt), MIN_THROTTLE, MAX_THROTTLE));
+	} else {
+		// Maintain a fixed high throttle for climb-out
+		setThrottle(MAX_THROTTLE * 0.9f);
+	}
+  // Step 2: Pitch airplane up to take off and climb
   if (getAltitude() < targetAltitude) {
-    if (getElevatorAngle() < MAX_ELEVATOR) {
-      setElevator(getElevatorAngle() + ELEVATOR_STEP);
-    }
-  }
+    float elevatorCommand = calcElevatorPID(targetAltitude, dt);
+		setElevator(elevatorCommand);
+	}
+
+	// Maintain level roll during the climb-out
+	levelRoll(dt);
 }
 
 // ----------------------------  MAINTAIN LEVEL FLIGHT  ---------------------------- //
 /* Autopilot for level flight. Takes a altitude target as input and attempts to maintain. */
-void levelFlight(float targetAltitude) {
+void levelFlight(float targetAltitude, float dt) {
   // PID control for altitude
-  float elevatorCommand = calcElevatorPID(targetAltitude);
+  float elevatorCommand = calcElevatorPID(targetAltitude, dt);
   setElevator(elevatorCommand);
-  levelRoll(); // Maintain level roll during flight
+	// Set cruise throttle (or use speed PID if implemented)
+	setThrottle(MAX_THROTTLE * 0.6f); // Could use a CRUISE_THROTTLE var instead or PID
+  levelRoll(dt); // Maintain level roll during flight
 }
 
 // ----------------------------  LANDING SEQUENCE  ---------------------------- //
 /* Autopilot for landing sequence.  */
-void land() {
+void land(float dt) {
   float currentAltitude = getAltitude();
-  levelRoll();
+  levelRoll(dt);
   
+  // Decrease altitude and safely land the plane by reducing throttle and/or control surfaces
   if (currentAltitude > LANDING_FLARE_ALTITUDE) {
-    // Decrease altitude and safely land the plane by reducing throttle and/or control surfaces
-    float throttle = getThrottle();
-    if (throttle > MIN_THROTTLE) {
-      throttle -= THROTTLE_STEP;
-      setThrottle(throttle);
-    }
-    // setElevator(-ELEVATOR_STEP); // Pitch down slowly
+    // Gently reduce throttle for descent
+		setThrottle(constrain(getThrottle() - (THROTTLE_STEP * dt), MIN_THROTTLE, MAX_THROTTLE * 0.3f));
+		
+		// Use elevator to maintain a shallow glide slope (pitch slightly down or neutral)
+		setElevator(LEVEL_ELEVATOR - ELEVATOR_STEP); 
   } else {
     // Once flare height is reached, increase elevator for flare and level roll
     setThrottle(MIN_THROTTLE);
@@ -585,37 +604,44 @@ void land() {
 
 // ---------------------------- HOLDING PATTERN ---------------------------- //
 /* Controls the plane to maintain a circular holding pattern. */
-void holdingPattern() {
+void holdingPattern(float dt) {
   // Example logic:
   // Maintain altitude
-  levelFlight(TEST_ALTITUDE);
-  // Apply a constant roll and rudder for a circular turn
-  setAileronLeft(-10.0);
-  setAileronRight(10.0);
-  setRudder(-5.0);
+  levelFlight(TEST_ALTITUDE, dt);
+  // Apply a constant roll for a circular turn
+	// Positive roll angle (e.g., 15 degrees) will initiate a turn
+	float targetRoll = 15.0f; 
+	float aileronCommand = calcAileronPID(targetRoll, dt); 
+	
+	// Set ailerons to maintain the target roll
+	setAileronLeft(aileronCommand);
+	setAileronRight(-aileronCommand); // Opposite deflection
+	
+	// Apply a constant rudder input to assist the turn (optional, depends on airframe)
+	setRudder(MAX_RUDDER * 0.3f);
 }
 
 // ----------------------------  STOP PLANE  ---------------------------- //
 /* Stops the plane. */
 void stopPlane() {
   // Set motors to 0. set control surfaces to neutral.
-  setThrottle(0.0);
-  setElevator(0.0);
-  setAileronLeft(0.0);
-  setAileronRight(0.0);
-  setRudder(0.0);
+  setThrottle(0.0f);
+  setElevator(0.0f);
+  setAileronLeft(0.0f);
+  setAileronRight(0.0f);
+  setRudder(0.0f);
   // Reset PID integrals
-  integral_alt = 0.0;
-  integral_roll = 0.0;
-  last_error_alt = 0.0;
-  last_error_roll = 0.0;
-  // enter low-power mode on microcontroller 
+  integral_alt = 0.0f;
+  integral_roll = 0.0f;
+  last_error_alt = 0.0f;
+  last_error_roll = 0.0f;
+  // set_sleep_mode();  // enter low-power mode on microcontroller 
 }
 
 // ----------------------------  LEVEL ROLL  ---------------------------- //
 /* Pulls the plane out of a roll. */
-void levelRoll() {
-  float aileronCommand = calcAileronPID(0.0, dt); // Target roll is 0 degrees
+void levelRoll(float dt) {
+  float aileronCommand = calcAileronPID(0.0f, dt); // Target roll is 0 degrees
   setAileronLeft(-aileronCommand); // Aileron deflection is opposite on each side
   setAileronRight(aileronCommand);
 }
@@ -633,9 +659,8 @@ float calcElevatorPID(float targetAltitude, float dt) {
   // Integral term
   integral_alt += error_alt * dt;
   // Anti-windup: clamp the integral term to a reasonable range
-  float integral_limit = 10.0;
-  if (integral_alt > integral_limit) integral_alt = integral_limit;
-  if (integral_alt < -integral_limit) integral_alt = -integral_limit;
+  float integral_limit = 10.0f;
+  integral_alt = constrain(integral_alt, -integral_limit, integral_limit);
   float i_term = Ki_alt * integral_alt;
   
   // Derivative term
@@ -646,9 +671,8 @@ float calcElevatorPID(float targetAltitude, float dt) {
   // Calculate the PID output and clamp to the allowed range
   float output = p_term + i_term + d_term;
   if (output > MAX_ELEVATOR) output = MAX_ELEVATOR;
-  if (output < MIN_ELEVATOR) output = MIN_ELEVATOR;
-
-  return output;
+  
+  return constrain(output, MIN_ELEVATOR, MAX_ELEVATOR);
 }
 
 // ----------------------------  AILERON PID  ---------------------------- //
@@ -664,9 +688,8 @@ float calcAileronPID(float targetRoll, float dt) {
   // Integral term
   integral_roll += error_roll * dt;
   // Anti-windup: clamp the integral term to a reasonable range
-  float integral_limit = 5.0;
-  if (integral_roll > integral_limit) integral_roll = integral_limit;
-  if (integral_roll < -integral_limit) integral_roll = -integral_limit;
+  float integral_limit = 5.0f;
+  integral_roll = constrain(integral_roll, -integral_limit, integral_limit);
   float i_term = Ki_roll * integral_roll;
   
   // Derivative term
@@ -676,19 +699,16 @@ float calcAileronPID(float targetRoll, float dt) {
 
   // Calculate the PID output and clamp to the allowed range
   float output = p_term + i_term + d_term;
-  if (output > MAX_AILERON) output = MAX_AILERON;
-  if (output < MIN_AILERON) output = MIN_AILERON;
-
-  return output;
+  
+  return constrain(output, MIN_AILERON, MAX_AILERON);
 }
-
 
 // ----------------------------  CHECK IF MOVING  ---------------------------- //
 /* Checks if the plane is moving. Returns true if moving. */
 bool isPlaneMoving() {
   // A simple example; this could be expanded based on gyro/accel data
   float speed = sqrt(pow(accelData[0], 2) + pow(accelData[1], 2) + pow(accelData[2], 2));
-  return speed > 0.1; // If movement detected (simple threshold)
+  return speed > 0.1f; // If movement detected (simple threshold)
 }
 
 // ----------------------------  CURRENT ALTITUDE  ---------------------------- //
@@ -700,7 +720,7 @@ float getAltitude() {
 // ----------------------------  CURRENT SPEED  ---------------------------- //
 /* Get the current speed. */
 float getSpeed() {
-  // return speed; // Return the speed
+  // return flightSpeed; // Return the speed
 }
 
 // ----------------------------  CURRENT THROTTLE  ---------------------------- //
@@ -742,14 +762,14 @@ float getRudderAngle() {
 // ----------------------------  SET THROTTLE  ---------------------------- //
 /* Sets the throttle value between 0.0 and 1.0. */
 void setThrottle(float throttleValue) {
-  // currentThrottle = constrain(MIN_THROTTLE, min(MAX_THROTTLE, throttleValue));
+  // currentThrottle = constrain(throttleValue, MIN_THROTTLE, MAX_THROTTLE);
   // return ; // Set the throttle power
 }
 
 // ----------------------------  SET ELEVATOR  ---------------------------- //
 /* Sets the elevator angle to control aircraft pitch. */
 void setElevator(float elevatorAngle) {
-  // currentThrottle = constrain(throttleValue, MIN_THROTTLE, MAX_THROTTLE);
+  // currentThrottle = constrain(elevatorAngle, MIN_ELEVATOR, MAX_ELEVATOR);
   // return ; // Set the elevator angle
 }
 
@@ -782,12 +802,12 @@ bool resetSensors() {
   // Reset logic here
 
   // Set all offsets to 0
-  altitudeOffset = 0.0;
+  altitudeOffset = 0.0f;
   for (int i = 0; i < 3; i++) {
-    accelOffset[i] = 0.0;
-    gyroOffset[i] = 0.0;
+    accelOffset[i] = 0.0f;
+    gyroOffset[i] = 0.0f;
   }
-  headingOffset = 0.0;
+  headingOffset = 0.0f;
 
   float rawDistance = getAltitude();
   // the rest of the raw measurements go here
@@ -800,7 +820,7 @@ bool resetSensors() {
   altitudeOffset = rawDistance;
   accelOffset[0] = rawAccel[0];
   accelOffset[1] = rawAccel[1];
-  accelOffset[2] = rawAccel[2];
+  accelOffset[2] = rawAccel[2] - 9.81f; // Account for gravity
   gyroOffset[0] = rawGyro[0];
   gyroOffset[1] = rawGyro[1];
   gyroOffset[2] = rawGyro[2];
@@ -866,6 +886,7 @@ void checkSensorConnections() {
   //   digitalWrite(ERROR_LED_PIN, HIGH);
   //   systemInFault = true;
   // }
+  logEvent("Sensor connection check complete.");
 }
 
 // ----------------------------  LOG TO FILE  ---------------------------- //
