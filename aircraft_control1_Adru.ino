@@ -116,29 +116,29 @@ bool sdCardAvailable = false;
 char logBuffer[128];
 
 // Constants
-const float LANDING_FLARE_ALTITUDE = 0.25; // meters - The altitude at which the plane initiates the flare maneuver.
-const float ROLL_TOLERANCE = 1.0; // degrees - The acceptable tolerance for the plane's roll angle.
-const float TEST_ALTITUDE = 1.0; // meters - Target altitude for test flights.
 const unsigned long TEST_LEVEL_DURATION = 10000; // milliseconds - Duration for maintaining level flight.
 const unsigned long TEST_HOLDING_PATTERN_DURATION = 20000; // milliseconds - Duration for circular holding pattern.
 const unsigned long SENSOR_RESET_STATIONARY_DURATION = 10000; // milliseconds - Duration the plane must be stationary for a sensor reset.
 const unsigned long TAXI_DURATION = 5000; // milliseconds - Duration for taxiing on the runway.
-const float MIN_TAKEOFF_SPEED = 15; // m/s - The minimum speed required for takeoff.
-const float MIN_THROTTLE = 0.0; // minimum throttle power (0.0 to 1.0)
-const float MAX_THROTTLE = 1.0; // maximum throttle power (0.0 to 1.0)
-const float THROTTLE_STEP = 0.05; // step throttle power by 5%
-const float LEVEL_ELEVATOR = 0.0; // degrees - elevator angle for level flight
-const float MIN_ELEVATOR = -15.0; // degrees - minimum elevator angle (TE up)
-const float MAX_ELEVATOR = 15.0; // degrees - maximum elevator angle (TE down)
-const float ELEVATOR_STEP = 1.0; // degrees - step elevator angle by 1
-const float MIN_AILERON = -15.0; // degrees - minimum aileron angle
-const float MAX_AILERON = 15.0; // degrees - maximum aileron angle
-const float AILERON_STEP = 1.0; // degrees - step ailerons angle by 1
-const float MIN_RUDDER = -15.0; // degrees - rudder full left angle
-const float MAX_RUDDER = 15.0; // degrees - rudder full right angle
-const float RUDDER_STEP = 1.0; // degrees - step rudder angle by 1
-const float FLARE_ELEVATOR_ANGLE = 10.0; // degrees - The elevator angle for the landing flare.
-const float FLARE_AILERON_ANGLE = 10.0; // degrees - Aileron angle to maintain stability during flare.
+const float LANDING_FLARE_ALTITUDE = 0.25f; // meters - The altitude at which the plane initiates the flare maneuver.
+const float ROLL_TOLERANCE = 1.0f; // degrees - The acceptable tolerance for the plane's roll angle.
+const float TEST_ALTITUDE = 1.0f; // meters - Target altitude for test flights.
+const float MIN_TAKEOFF_SPEED = 15.0f; // m/s - The minimum speed required for takeoff.
+const float MIN_THROTTLE = 0.0f; // minimum throttle power (0.0 to 1.0)
+const float MAX_THROTTLE = 1.0f; // maximum throttle power (0.0 to 1.0)
+const float THROTTLE_STEP = 0.05f; // step throttle power by 5%
+const float LEVEL_ELEVATOR = 0.0f; // degrees - elevator angle for level flight
+const float MIN_ELEVATOR = -15.0f; // degrees - minimum elevator angle (TE up)
+const float MAX_ELEVATOR = 15.0f; // degrees - maximum elevator angle (TE down)
+const float ELEVATOR_STEP = 1.0f; // degrees - step elevator angle by 1
+const float MIN_AILERON = -15.0f; // degrees - minimum aileron angle
+const float MAX_AILERON = 15.0f; // degrees - maximum aileron angle
+const float AILERON_STEP = 1.0f; // degrees - step ailerons angle by 1
+const float MIN_RUDDER = -15.0f; // degrees - rudder full left angle
+const float MAX_RUDDER = 15.0f; // degrees - rudder full right angle
+const float RUDDER_STEP = 1.0f; // degrees - step rudder angle by 1
+const float FLARE_ELEVATOR_ANGLE = 10.0f; // degrees - The elevator angle for the landing flare.
+const float FLARE_AILERON_ANGLE = 10.0f; // degrees - Aileron angle to maintain stability during flare.
 
 // ----------------------------  FUNCTION PROTOTYPES  ---------------------------- //
 // Define all function prototypes to avoid compilation errors
@@ -708,7 +708,7 @@ float calcAileronPID(float targetRoll, float dt) {
 bool isPlaneMoving() {
   // A simple example; this could be expanded based on gyro/accel data
   float speed = sqrt(pow(accelData[0], 2) + pow(accelData[1], 2) + pow(accelData[2], 2));
-  return speed > 0.1f; // If movement detected (simple threshold)
+  return speed > 0.1f; // If movement detected (threshold)
 }
 
 // ----------------------------  CURRENT ALTITUDE  ---------------------------- //
