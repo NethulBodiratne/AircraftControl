@@ -1,13 +1,14 @@
 /* ----------------------------  ARDUINO AIRPLANE CONTROL  ---------------------------- */
 /* 
   Nethul Bodiratne 
-  Last updated: 10/2/2025
+  Last updated: 10/3/2025
 */
 /* ------------------------------------------------------------------------------------ */
 
 #include <Wire.h>
 #include <SPI.h>
 #include <SD.h>
+#include <avr/sleep.h>
 // Add other necessary libraries for the sensors (e.g., MPU6050 for gyro/accelerometer, HMC5883L for magnetometer, etc.)
 
 // --- Helper Functions/Macros (Arduino environment) ---
@@ -161,6 +162,7 @@ float getRollAngle();
 bool resetSensors();
 void checkConstantsOrder();
 void checkSensorConnections();
+void enterSleep();
 
 // Control surface Functions
 void setThrottle(float throttleValue);
@@ -191,14 +193,14 @@ void land(float dt);
 // ----------------------------  SETUP  ---------------------------- //
 void setup() {
   // Initialize serial communication
-  Serial.begin(9600); // Increasing the baud rate to 115200 may allow faster non-blocking logging
+  Serial.begin(115200); // (9600 or 115200) Increasing the baud rate to 115200 may allow faster non-blocking logging
 
   // Setup pins
-  pinMode(MODE_0, INPUT); // Using INPUT_PULLUP might be more stable
-  pinMode(MODE_1, INPUT);
-  pinMode(MODE_2, INPUT);
-  pinMode(MODE_3, INPUT);
-  pinMode(MODE_4, INPUT);
+  pinMode(MODE_0, INPUT_PULLUP); // Using INPUT_PULLUP might be more stable than INPUT
+  pinMode(MODE_1, INPUT_PULLUP);
+  pinMode(MODE_2, INPUT_PULLUP);
+  pinMode(MODE_3, INPUT_PULLUP);
+  pinMode(MODE_4, INPUT_PULLUP);
   pinMode(ERROR_LED_PIN, OUTPUT);
   //pinMode(STATUS_GOOD_PIN, OUTPUT);
 
@@ -242,6 +244,14 @@ void setup() {
   // Read initial mode from pins
   currentMode = checkModePins();
   lastMode = currentMode;
+
+  // --- Power Reduction Optimization ---
+  // Turn off the Analog-to-Digital Converter (ADC) if not using analogRead() as its a constant power drain.
+  PRR |= (1 << PRADC); 
+  // Turn off Timer 2 and Timer 1 if they are not used for servo/motor PWM. If Timer1/Timer2 are being used for PWM, DO NOT disable them.
+  PRR |= (1 << PRTIM2); 
+  PRR |= (1 << PRTIM1);
+  // TWI (Wire) and SPI (SD) must remain active as they are used.
   
   if (systemInFault) {
     currentMode = MODE_FAULT;
@@ -310,6 +320,11 @@ void loop() {
 
     // Update lastLoopTime after other logic to keep it accurate
     lastLoopTime = now;
+  } else {
+    // Enter Idle mode to save power. Shouldn't cause the program to miss deadlines or interfere with sensors
+    snprintf(logBuffer, sizeof(logBuffer), "Entering Sleep Mode.");
+    logEvent(logBuffer);
+    enterSleep();
   }
 
   if (sdCardAvailable && now - lastLogFlushTime >= LOG_PERIOD) {
@@ -645,7 +660,7 @@ void stopPlane() {
   integral_roll = 0.0f;
   last_error_alt = 0.0f;
   last_error_roll = 0.0f;
-  // set_sleep_mode();  // enter low-power mode on microcontroller 
+  enterSleep();  // Enter low-power idle on microcontroller. A deeper sleep mode can be implemented in a later version.
 }
 
 // ----------------------------  LEVEL ROLL  ---------------------------- //
@@ -778,7 +793,7 @@ void setThrottle(float throttleValue) {
 // ----------------------------  SET ELEVATOR  ---------------------------- //
 /* Sets the elevator angle to control aircraft pitch. */
 void setElevator(float elevatorAngle) {
-  // currentThrottle = constrain(elevatorAngle, MIN_ELEVATOR, MAX_ELEVATOR);
+  // currentElevator = constrain(elevatorAngle, MIN_ELEVATOR, MAX_ELEVATOR);
   // return ; // Set the elevator angle
 }
 
@@ -826,14 +841,14 @@ bool resetSensors() {
   // Read raw sensor data to get the offset values
   
   // Store these values as offsets, they will be used as corrections for the get functions
-  altitudeOffset = rawDistance;
-  accelOffset[0] = rawAccel[0];
-  accelOffset[1] = rawAccel[1];
-  accelOffset[2] = rawAccel[2] - 9.81f; // Account for gravity
-  gyroOffset[0] = rawGyro[0];
-  gyroOffset[1] = rawGyro[1];
-  gyroOffset[2] = rawGyro[2];
-  headingOffset = rawHeading;
+  // altitudeOffset = rawDistance;
+  // accelOffset[0] = rawAccel[0];
+  // accelOffset[1] = rawAccel[1];
+  // accelOffset[2] = rawAccel[2] - 9.81f; // Account for gravity
+  // gyroOffset[0] = rawGyro[0];
+  // gyroOffset[1] = rawGyro[1];
+  // gyroOffset[2] = rawGyro[2];
+  // headingOffset = rawHeading;
   
   logEvent("Calibration complete. Stored offsets:");
   snprintf(logBuffer, sizeof(logBuffer), "Altitude Offset: %.2f m", altitudeOffset);
@@ -896,6 +911,24 @@ void checkSensorConnections() {
   //   systemInFault = true;
   // }
   logEvent("Sensor connection check complete.");
+}
+
+void enterSleep() {
+  // 1. Select the lightest sleep state: Idle Mode.
+  // This stops the CPU clock (clkCPU) and Flash clock (clkFLASH), but leaves the I/O clock (clkI/O) running for all peripherals.
+  set_sleep_mode(SLEEP_MODE_IDLE); 
+
+  // 2. Enable the sleep mode.
+  sleep_enable();
+
+  // 3. Put the CPU to sleep.
+  // The program wakes up immediately when the next interrupt occurs (e.g., Timer 0 overflow for millis()).
+  sleep_cpu();
+
+  // 4. Disable sleep mode immediately upon waking.
+  sleep_disable(); 
+  
+  // Note: No need to disable/re-enable interrupts (cli()/sei()) here because the function is being called *after* an interrupt has already been detected (or within the main loop awaiting an event), and Idle Mode has very low latency.
 }
 
 // ----------------------------  LOG TO FILE  ---------------------------- //
