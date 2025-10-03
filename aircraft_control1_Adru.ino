@@ -28,6 +28,17 @@
 #define ERROR_LED_PIN 13
 //#define STATUS_GOOD_PIN 12
 
+// Battery Monitoring. Assumes a 3S LiPo (max 12.6V) monitored via a 4:1 voltage divider (e.g., 30kOhm and 10kOhm). Formula: V_in = V_out * ((R1 + R2) / R2) 
+#define BATTERY_ADC_PIN A0 
+const float ADC_REFERENCE_VOLTAGE = 5.0f; // V (Arduino VCC/AREF)
+const float VOLTAGE_DIVIDER_RATIO = 4.0f; 
+const float VOLTAGE_FULL_LEVEL = 12.6f;
+const float VOLTAGE_WARNING_LEVEL = 10.5f; // ~3.5V per cell
+const float VOLTAGE_CRITICAL_LEVEL = 9.9f; // ~3.3V per cell - Triggers auto-shutdown
+const unsigned long BATTERY_CHECK_PERIOD = 60000; // milliseconds - Rate at which to check battery voltage
+unsigned long lastBatteryCheckTime = 0;
+float currentBatteryVoltage = VOLTAGE_FULL_LEVEL; // (NEW) Initial voltage
+
 // Flight Plan Timers
 unsigned long flightStartTime = 0;
 unsigned long modeStartTime = 0;
@@ -163,6 +174,8 @@ bool resetSensors();
 void checkConstantsOrder();
 void checkSensorConnections();
 void enterSleep();
+float readBatteryvoltage();
+void checkBatteryStatus();
 
 // Control surface Functions
 void setThrottle(float throttleValue);
@@ -230,16 +243,18 @@ void setup() {
   // (e.g., MPU6050.begin(), HMC5883L.begin(), etc.)
   Serial.println("Sensors Initialized.");
 
-  // Initialize timer for system uptime
+  // Initialize timers for system uptime
   flightStartTime = millis();
   modeStartTime = millis();
   lastLoopTime = millis();
   lastControlTime = millis();
+  lastBatteryCheckTime = millis();
 
   // Initail checks and reads
   checkConstantsOrder();
   checkSensorConnections();
   readSensors();
+  checkBatteryStatus();
 
   // Read initial mode from pins
   currentMode = checkModePins();
@@ -247,7 +262,7 @@ void setup() {
 
   // --- Power Reduction Optimization ---
   // Turn off the Analog-to-Digital Converter (ADC) if not using analogRead() as its a constant power drain.
-  PRR |= (1 << PRADC); 
+  // PRR |= (1 << PRADC); // Not turned off because ADC is used for battery monitoring.
   // Turn off Timer 2 and Timer 1 if they are not used for servo/motor PWM. If Timer1/Timer2 are being used for PWM, DO NOT disable them.
   PRR |= (1 << PRTIM2); 
   PRR |= (1 << PRTIM1);
@@ -274,6 +289,12 @@ void loop() {
 
     // Always read sensor data at the beginning of the loop
     readSensors();
+
+    // Check battery status periodically
+    if (now - lastBatteryCheckTime >= BATTERY_CHECK_PERIOD) {
+      checkBatteryStatus();
+      lastBatteryCheckTime = now;
+    }
     
     // Check the physical mode selection pins
     currentMode = checkModePins();
@@ -861,6 +882,38 @@ bool resetSensors() {
   logEvent(logBuffer);
 
   return true;  // Return true if reset successful
+}
+
+// ----------------------------  CHECK BATTERY VOLTAGE  ---------------------------- //
+/* Reads the current battery voltage level and returns it in a useable format. */
+float readBatteryVoltage() {
+  // Read the raw 10-bit value (0-1023)
+  int rawADC = analogRead(BATTERY_ADC_PIN); 
+
+  // Conversion Formula: V_in = (Raw_ADC / 1023.0) * V_Ref * V_Divider_Ratio
+  currentBatteryVoltage = ((float)rawADC / 1023.0f) * ADC_REFERENCE_VOLTAGE * VOLTAGE_DIVIDER_RATIO;
+  
+  return currentBatteryVoltage;
+}
+
+// ----------------------------  CHECK BATTERY STAUS  ---------------------------- //
+/* Checks the battery voltage against critical and warning thresholds. */
+void checkBatteryStatus() {
+  readBatteryVoltage(); // Update the global voltage variable
+
+  if (currentBatteryVoltage <= VOLTAGE_CRITICAL_LEVEL) {
+    // CRITICAL FAULT: Initiate emergency shutdown
+    if (!systemInFault) {
+      snprintf(logBuffer, sizeof(logBuffer), "CRITICAL: Battery voltage %.2fV. Initiating auto-shutdown and entering MODE_FAULT.", currentBatteryVoltage);
+      logEvent(logBuffer);
+      systemInFault = true; // This will trigger the MODE_FAULT transition in the next loop() iteration
+    }
+  } else if (currentBatteryVoltage < VOLTAGE_WARNING_LEVEL) {
+    // WARNING: Notify of low power, but continue flight
+    snprintf(logBuffer, sizeof(logBuffer), "WARNING: Low battery voltage at %.2fV. Consider landing.", currentBatteryVoltage);
+    logEvent(logBuffer);
+    digitalWrite(ERROR_LED_PIN, !digitalRead(ERROR_LED_PIN)); // Blink the error LED for warning
+  }
 }
 
 // ----------------------------  CHECK CONSTANTS MIN & MAX  ---------------------------- //
