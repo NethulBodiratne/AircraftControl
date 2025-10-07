@@ -1,7 +1,7 @@
 /* ----------------------------  ARDUINO AIRPLANE CONTROL  ---------------------------- */
 /* 
   Nethul Bodiratne 
-  Last updated: 10/3/2025
+  Last updated: 10/7/2025
 */
 /* ------------------------------------------------------------------------------------ */
 
@@ -57,7 +57,9 @@ float accelData[3] = {0.0f, 0.0f, 0.0f};   // Example: {x, y, z} acceleration
 float distanceData = 0.0f;
 float headingData = 0.0f;
 float groundAltitude = 0.0f; 		// Altitude relative to takeoff point (calibrated)
+float lastAltitude = 0.0f;
 float rollAngle = 0.0f; 				// Calculated roll angle
+float lastRoll = 0.0f;
 float flightSpeed = 0.0f; 			// Air speed or ground speed
 
 // Sensor offsets for error correction during sensor reset
@@ -98,7 +100,7 @@ bool systemInFault = false;
 
 // Mode Enum for Better Readability
 enum Mode {
-  MODE_RESET_SENSORS = 1,
+  MODE_RESET_SENSORS = 0,
   MODE_STOPPED,
   MODE_TAXI,
   MODE_TAKEOFF_LEVEL_LAND,
@@ -125,12 +127,12 @@ FlightState currentFlightState = STATE_START;
 // Log file creation and log buffer
 File logFile;
 bool sdCardAvailable = false;
-char logBuffer[128];
+char logBuffer[128];  // Must be longer than 96
 
 // Constants
 const unsigned long TEST_LEVEL_DURATION = 10000; // milliseconds - Duration for maintaining level flight.
 const unsigned long TEST_HOLDING_PATTERN_DURATION = 20000; // milliseconds - Duration for circular holding pattern.
-const unsigned long SENSOR_RESET_STATIONARY_DURATION = 10000; // milliseconds - Duration the plane must be stationary for a sensor reset.
+const unsigned long SENSOR_RESET_STATIONARY_DURATION = 5000; // milliseconds - Duration the plane must be stationary for a sensor reset.
 const unsigned long TAXI_DURATION = 5000; // milliseconds - Duration for taxiing on the runway.
 const float LANDING_FLARE_ALTITUDE = 0.25f; // meters - The altitude at which the plane initiates the flare maneuver.
 const float ROLL_TOLERANCE = 1.0f; // degrees - The acceptable tolerance for the plane's roll angle.
@@ -710,13 +712,12 @@ float calcElevatorPID(float targetAltitude, float dt) {
   float i_term = Ki_alt * integral_alt;
   
   // Derivative term
-  float derivative_alt = (error_alt - last_error_alt) / dt;
+  float derivative_alt = (currentAltitude - lastAltitude) / dt;
   float d_term = Kd_alt * derivative_alt;
-  last_error_alt = error_alt;
+  lastAltitude = currentAltitude;
 
   // Calculate the PID output and clamp to the allowed range
   float output = p_term + i_term + d_term;
-  if (output > MAX_ELEVATOR) output = MAX_ELEVATOR;
   
   return constrain(output, MIN_ELEVATOR, MAX_ELEVATOR);
 }
@@ -739,9 +740,9 @@ float calcAileronPID(float targetRoll, float dt) {
   float i_term = Ki_roll * integral_roll;
   
   // Derivative term
-  float derivative_roll = (error_roll - last_error_roll) / dt;
+  float derivative_roll = (currentRoll - lastRoll) / dt;
   float d_term = Kd_roll * derivative_roll;
-  last_error_roll = error_roll;
+  lastRoll = currentRoll;
 
   // Calculate the PID output and clamp to the allowed range
   float output = p_term + i_term + d_term;
