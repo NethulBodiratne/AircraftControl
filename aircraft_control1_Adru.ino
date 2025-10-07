@@ -998,7 +998,7 @@ void logEvent(const char* message) {
   unsigned long minutes = totalMinutes % 60;
 
   // Format time string
-  char timeStr[40];
+  char timeStr[32];
   snprintf(timeStr, sizeof(timeStr), "%02lu MIN : %02lu SEC : %03lu MSEC - ", minutes, seconds, milliseconds);
   
   // Print to serial monitor for real-time debugging (Immediate)
