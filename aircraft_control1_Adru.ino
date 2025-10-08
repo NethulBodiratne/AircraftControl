@@ -889,7 +889,7 @@ bool resetSensors() {
 /* Reads the current battery voltage level and returns it in a useable format. */
 float readBatteryVoltage() {
   // Read the raw 10-bit value (0-1023)
-  int rawADC = analogRead(BATTERY_ADC_PIN); 
+  int rawBatteryADC = analogRead(BATTERY_ADC_PIN); 
 
   // Conversion Formula: V_in = (Raw_ADC / 1023.0) * V_Ref * V_Divider_Ratio
   currentBatteryVoltage = ((float)rawADC / 1023.0f) * ADC_REFERENCE_VOLTAGE * VOLTAGE_DIVIDER_RATIO;
