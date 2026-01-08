@@ -1,7 +1,7 @@
 /* ----------------------------  ARDUINO AIRPLANE CONTROL  ---------------------------- */
 /* 
   Nethul Bodiratne 
-  Last updated: 10/8/2025
+  Last updated: 1/8/2026
 */
 /* ------------------------------------------------------------------------------------ */
 
@@ -16,6 +16,10 @@
 #ifndef constrain
 #define constrain(amt, low, high) ((amt) < (low) ? (low) : ((amt) > (high) ? (high) : (amt)))
 #endif
+
+// ---------------------------- DEBUG & SD LOGGING FLAGS ----------------------------
+#define DEBUG_MODE 1  // Set to 0 for production (disables verbose logging)
+#define ENABLE_SD_LOGGING 1  // Set to 0 to disable SD card logging entirely
 
 // Pin Definitions for Mode Selection
 #define MODE_0 2
@@ -141,6 +145,10 @@ const float TEST_BANK_ANGLE = 15.0f;  // degrees - Target bank angle for the cir
 const float MIN_TAKEOFF_SPEED = 15.0f; // m/s - The minimum speed required for takeoff.
 const float MIN_THROTTLE = 0.0f; // minimum throttle power (0.0 to 1.0)
 const float MAX_THROTTLE = 1.0f; // maximum throttle power (0.0 to 1.0)
+const float CRUISE_THROTTLE = MAX_THROTTLE * 0.6f;
+const float CLIMB_THROTTLE = MAX_THROTTLE * 0.9f;
+const float TAXI_THROTTLE = 0.2f;
+const float LANDING_THROTTLE_MIN = MAX_THROTTLE * 0.3f;
 const float THROTTLE_STEP = 0.05f; // step throttle power by 5%
 const float LEVEL_ELEVATOR = 0.0f; // degrees - elevator angle for level flight
 const float MIN_ELEVATOR = -15.0f; // degrees - minimum elevator angle (TE up)
@@ -151,6 +159,7 @@ const float MAX_AILERON = 15.0f; // degrees - maximum aileron angle
 const float AILERON_STEP = 1.0f; // degrees - step ailerons angle by 1
 const float MIN_RUDDER = -15.0f; // degrees - rudder full left angle
 const float MAX_RUDDER = 15.0f; // degrees - rudder full right angle
+const float HOLDING_RUDDER = MAX_RUDDER * 0.3f;
 const float RUDDER_STEP = 1.0f; // degrees - step rudder angle by 1
 const float FLARE_ELEVATOR_ANGLE = 10.0f; // degrees - The elevator angle for the landing flare.
 const float FLARE_AILERON_ANGLE = 10.0f; // degrees - Aileron angle to maintain stability during flare.
@@ -350,11 +359,9 @@ void loop() {
     enterSleep();
   }
 
-  if (sdCardAvailable && now - lastLogFlushTime >= LOG_PERIOD) {
+  if (sdCardAvailable && logFile && (now - lastLogFlushTime >= LOG_PERIOD)) {
     lastLogFlushTime = now;
-    if (logFile) {
-      logFile.flush();  // Flush logs to file now
-    }
+    logFile.flush();
   }
 }
 
@@ -462,7 +469,7 @@ void modeTaxi() {
   // Add taxi logic based on distance/time
   if (millis() - modeStartTime < TAXI_DURATION) { // Taxi for 5 seconds (as an example)
     // Code to control the plane's motors for taxiing
-    setThrottle(0.2f); // Example throttle for taxiing, can be changed to setThrottle(TAXI_THROTTLE)
+    setThrottle(TAXI_THROTTLE);
     setRudder(0.0f);
   } else { // Stop and transition to parked state
     stopPlane();
@@ -592,16 +599,18 @@ void modeHoldingPattern(float dt) {
 void takeOff(float targetAltitude, float dt) {
   // Code for increasing altitude until targetAltitude is reached (using distance sensor or altitude control system)
   // Code to increase speed and get the plane airborne
-  // Step 1: Increase throttle until takeoff speed is reached
-  if (getSpeed() < MIN_TAKEOFF_SPEED) {
+  float currentSpeed = getSpeed();
+  float currentAltitude = getAltitude();
+  // Increase throttle until takeoff speed is reached
+  if (currentSpeed < MIN_TAKEOFF_SPEED) {
     // Ramp up throttle gradually
-		setThrottle(constrain(getThrottle() + (THROTTLE_STEP), MIN_THROTTLE, MAX_THROTTLE));
+		setThrottle(constrain(getThrottle() + THROTTLE_STEP, MIN_THROTTLE, MAX_THROTTLE));
 	} else {
 		// Maintain a fixed high throttle for climb-out
-		setThrottle(MAX_THROTTLE * 0.9f);
+		setThrottle(CLIMB_THROTTLE);
 	}
-  // Step 2: Pitch airplane up to take off and climb
-  if (getAltitude() < targetAltitude) {
+  // Pitch airplane up to take off and climb
+  if (currentAltitude < targetAltitude) {
     float elevatorCommand = calcElevatorPID(targetAltitude, dt);
 		setElevator(elevatorCommand);
 	}
@@ -617,7 +626,7 @@ void cruiseFlight(float targetAltitude, float targetRoll, float dt) {
   float elevatorCommand = calcElevatorPID(targetAltitude, dt);
   setElevator(elevatorCommand);
 	// Set cruise throttle (or use speed PID if implemented)
-	setThrottle(MAX_THROTTLE * 0.6f); // Could use a CRUISE_THROTTLE var instead or PID
+	setThrottle(CRUISE_THROTTLE); // Could use a PID instead
   
   // PID control for roll
   float aileronCommand = calcAileronPID(targetRoll, dt); 
@@ -644,7 +653,7 @@ void land(float dt) {
   // Decrease altitude and safely land the plane by reducing throttle and/or control surfaces
   if (currentAltitude > LANDING_FLARE_ALTITUDE) {
     // Gently reduce throttle for descent
-		setThrottle(constrain(getThrottle() - (THROTTLE_STEP), MIN_THROTTLE, MAX_THROTTLE * 0.3f));
+		setThrottle(constrain(getThrottle() - THROTTLE_STEP, MIN_THROTTLE, LANDING_THROTTLE_MIN));
 		
 		// Use elevator to maintain a shallow glide slope (pitch slightly down or neutral)
 		setElevator(LEVEL_ELEVATOR - ELEVATOR_STEP); 
@@ -666,7 +675,7 @@ void holdingPattern(float dt) {
   cruiseFlight(TEST_ALTITUDE, TEST_BANK_ANGLE, dt);
   
 	// Apply a constant rudder input to assist the turn (optional, depends on airframe)
-	setRudder(MAX_RUDDER * 0.3f);
+	setRudder(HOLDING_RUDDER);
 }
 
 // ----------------------------  STOP PLANE  ---------------------------- //
@@ -712,7 +721,7 @@ float calcElevatorPID(float targetAltitude, float dt) {
   float i_term = Ki_alt * integral_alt;
   
   // Derivative term
-  float derivative_alt = (currentAltitude - lastAltitude) / dt;
+  float derivative_alt = (error_alt - last_error_alt) / dt;
   float d_term = Kd_alt * derivative_alt;
   lastAltitude = currentAltitude;
 
@@ -754,7 +763,16 @@ float calcAileronPID(float targetRoll, float dt) {
 /* Checks if the plane is moving. Returns true if moving. */
 bool isPlaneMoving() {
   // A simple example; this could be expanded based on gyro/accel data
-  return (accelData[0]*accelData[0] + accelData[1]*accelData[1] + accelData[2]*accelData[2]) > (0.1f * 0.1f); // (Accel[x]^2 + Accel[y]^2 + Accel[z]^2) > (threshold^2)
+  float accelMagSquared = vectorMagnitudeSquared(accelData[0], accelData[1], accelData[2]);
+  return accelMagSquared > MIN_ACCEL_SQUARED_THRESHOLD;
+}
+
+// ----------------------------  VECTOR MATH INLINE HELPERS  ---------------------------- //
+inline float vectorMagnitudeSquared(float x, float y, float z) {
+  return x*x + y*y + z*z;
+}
+inline float vectorMagnitude(float x, float y, float z) {
+  return sqrt(x*x + y*y + z*z);
 }
 
 // ----------------------------  CURRENT ALTITUDE  ---------------------------- //
@@ -892,7 +910,7 @@ float readBatteryVoltage() {
   int rawBatteryADC = analogRead(BATTERY_ADC_PIN); 
 
   // Conversion Formula: V_in = (Raw_ADC / 1023.0) * V_Ref * V_Divider_Ratio
-  currentBatteryVoltage = ((float)rawADC / 1023.0f) * ADC_REFERENCE_VOLTAGE * VOLTAGE_DIVIDER_RATIO;
+  currentBatteryVoltage = ((float)rawBatteryADC / 1023.0f) * ADC_REFERENCE_VOLTAGE * VOLTAGE_DIVIDER_RATIO;
   
   return currentBatteryVoltage;
 }
@@ -1002,17 +1020,22 @@ void logEvent(const char* message) {
   snprintf(timeStr, sizeof(timeStr), "%02lu MIN : %02lu SEC : %03lu MSEC - ", minutes, seconds, milliseconds);
   
   // Print to serial monitor for real-time debugging (Immediate)
-  Serial.print(timeStr);
-  Serial.println(message);
+  #if DEBUG_MODE
+    Serial.print(timeStr);
+    Serial.println(message);
+  #endif
 
   // Write to log file (will be flushed periodically)
-  if (sdCardAvailable && logFile) {
-    logFile.print(timeStr);
-    logFile.println(message);
+  #if ENABLE_SD_LOGGING
+    if (sdCardAvailable && logFile) {
+      logFile.print(timeStr);
+      logFile.println(message);
     // Do NOT call logFile.flush() here, as it's slow. It's called periodically in loop().
-  } else if (sdCardAvailable) {
-    // logFile is closed, but SD is available. Should not happen unless corrupted.
-    Serial.println("ERROR: Failed to open log file for writing.");
-    digitalWrite(ERROR_LED_PIN, HIGH);
-  }
+    } else if (sdCardAvailable) {
+      // logFile is closed, but SD is available. Should not happen unless corrupted.
+      Serial.println("ERROR: Failed to open log file for writing.");
+      digitalWrite(ERROR_LED_PIN, HIGH);
+    }
+  #endif
+  
 }
